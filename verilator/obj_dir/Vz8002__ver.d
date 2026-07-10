@@ -1,0 +1,1 @@
+obj_dir/Vz8002.cpp obj_dir/Vz8002.h obj_dir/Vz8002.mk obj_dir/Vz8002__Slow.cpp obj_dir/Vz8002__Syms.cpp obj_dir/Vz8002__Syms.h obj_dir/Vz8002__Trace.cpp obj_dir/Vz8002__Trace__Slow.cpp obj_dir/Vz8002__ver.d obj_dir/Vz8002_classes.mk  : /usr/local/bin/verilator_bin ../rtl/cpu/z8002/z8002.sv /usr/local/bin/verilator_bin 
