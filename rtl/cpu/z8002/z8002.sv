@@ -37,13 +37,17 @@ module z8002
     localparam [2:0] LD=0, ADD=1, SUB=2, AND=3, OR=4, XOR=5, CP=6;
 
     reg [15:0] R [0:15];
-    reg [15:0] pc, fcw, ir, operand;
+    reg [15:0] pc, fcw, ir, operand, ea;
     reg [3:0]  dst, src;
-    reg [2:0]  aluop;
+    reg [2:0]  aluop, daop;
     reg        retire, illegal;
 
+    // direct/indirect memory access op (for the EA states)
+    localparam [2:0] DA_LDR=0, DA_STR=1, DA_STI=2, DA_CLR=3, DA_TST=4;
+
     localparam [3:0] S_RST_FCW=0, S_RST_PC=1, S_FETCH0=2, S_IMM=3, S_MEMRD=4,
-                     S_ALU=5, S_MEMWR=6, S_SHIFT=7, S_JP=8, S_ADDB_RD=9, S_ILLEGAL=10;
+                     S_ALU=5, S_MEMWR=6, S_SHIFT=7, S_JP=8, S_ADDB_RD=9, S_ILLEGAL=10,
+                     S_DA_FETCH=11, S_DA_IMM=12, S_DA_RD=13, S_DA_WR=14;
     reg [3:0] state;
 
     assign addr = (state==S_RST_FCW) ? 16'h0002 :
@@ -51,12 +55,17 @@ module z8002
                   (state==S_ADDB_RD) ? (R[src] & 16'hFFFE) :
                   (state==S_MEMRD  ) ? (R[src] & 16'hFFFE) :
                   (state==S_MEMWR  ) ?  R[dst] :
+                  (state==S_DA_RD  ) ?  ea :
+                  (state==S_DA_WR  ) ?  ea :
                                         pc;
     assign mreq    = (state!=S_ILLEGAL);
     assign iorq    = 1'b0;
-    assign we      = (state==S_MEMWR);
+    assign we      = (state==S_MEMWR) || (state==S_DA_WR);
     assign wordacc = (state!=S_ADDB_RD);
-    assign dout    = (state==S_MEMWR) ? R[src] : 16'h0000;
+    assign dout    = (state==S_MEMWR) ? R[src] :
+                     (state==S_DA_WR) ? (daop==DA_STR ? R[src] :
+                                         daop==DA_STI ? operand : 16'h0000) :
+                                        16'h0000;
 
     assign dbg_pc=pc; assign dbg_fcw=fcw; assign dbg_ir=ir;
     assign dbg_retire=retire; assign dbg_illegal=illegal;
@@ -90,7 +99,7 @@ module z8002
     always @(posedge clk) begin
         if (!reset_n) begin
             pc<=0; fcw<=0; ir<=0; dst<=0; src<=0; aluop<=0; operand<=0;
-            retire<=0; illegal<=0; state<=S_RST_FCW;
+            ea<=0; daop<=0; retire<=0; illegal<=0; state<=S_RST_FCW;
             for (i=0;i<16;i=i+1) R[i]<=16'h0000;
         end else if (ce) begin
             retire <= 1'b0;
@@ -148,6 +157,47 @@ module z8002
                 // ---- JP cc,addr (0x5E) : cc=NIB3 ----
                 else if (din[15:8]==8'h5E) begin
                     src<=din[3:0]; pc<=pc2; state<=S_JP;
+                end
+                // ---- LD rd,addr direct (0x61, NIB2=0) ----
+                else if (din[15:8]==8'h61 && din[7:4]==4'h0) begin
+                    dst<=din[3:0]; daop<=DA_LDR; pc<=pc2; state<=S_DA_FETCH;
+                end
+                // ---- LD addr,rs direct (0x6F, NIB2=0) ----
+                else if (din[15:8]==8'h6F && din[7:4]==4'h0) begin
+                    src<=din[3:0]; daop<=DA_STR; pc<=pc2; state<=S_DA_FETCH;
+                end
+                // ---- LD @rd,#imm16 (0x0D, NIB3=5): EA=R[dst] ----
+                else if (din[15:8]==8'h0D && din[3:0]==4'h5) begin
+                    ea<=R[din[7:4]]; daop<=DA_STI; pc<=pc2; state<=S_DA_IMM;
+                end
+                // ---- direct group (0x4D, NIB2=0): 5=LD#imm 8=CLR 4=TEST ----
+                else if (din[15:8]==8'h4D && din[7:4]==4'h0) begin
+                    pc<=pc2;
+                    case (din[3:0])
+                        4'h5: begin daop<=DA_STI; state<=S_DA_FETCH; end
+                        4'h8: begin daop<=DA_CLR; state<=S_DA_FETCH; end
+                        4'h4: begin daop<=DA_TST; state<=S_DA_FETCH; end
+                        default: begin illegal<=1'b1; state<=S_ILLEGAL; end
+                    endcase
+                end
+                // ---- DEC rd,#n (0xAB, word, ZSV) ----
+                else if (din[15:8]==8'hAB) begin
+                    incn=din[3:0]+4'd1; a16=R[din[7:4]]; res16=a16-{12'd0,incn};
+                    v=a16[15] & ~res16[15];
+                    R[din[7:4]]<=res16;
+                    fcw<=(fcw & ~(MZ|MS|MV)) | ((res16==0)?MZ:0)|(res16[15]?MS:0)|(v?MV:0);
+                    pc<=pc2; retire<=1'b1;
+                end
+                // ---- DECB rbd,#n (0xAA, byte, ZSV) ----
+                else if (din[15:8]==8'hAA) begin
+                    incn=din[3:0]+4'd1;
+                    dbyte = din[7] ? R[din[6:4]][7:0] : R[din[6:4]][15:8];
+                    add8 = {1'b0,dbyte} - {5'd0,incn};
+                    v = dbyte[7] & ~add8[7];
+                    if (din[7]) R[din[6:4]][7:0]<=add8[7:0];
+                    else        R[din[6:4]][15:8]<=add8[7:0];
+                    fcw<=(fcw & ~(MZ|MS|MV)) | ((add8[7:0]==0)?MZ:0)|(add8[7]?MS:0)|(v?MV:0);
+                    pc<=pc2; retire<=1'b1;
                 end
                 // ---- INC rd,#n (0xA9, word, ZSV) ----
                 else if (din[15:8]==8'hA9) begin
@@ -226,6 +276,23 @@ module z8002
 
             // store handled combinationally via addr/dout/we
             S_MEMWR: begin retire<=1'b1; state<=S_FETCH0; end
+
+            // ---- direct addressing ----
+            S_DA_FETCH: begin
+                ea<=din; pc<=pc+16'd2;
+                case (daop)
+                    DA_LDR, DA_TST: state<=S_DA_RD;
+                    DA_STI:         state<=S_DA_IMM;
+                    default:        state<=S_DA_WR;   // DA_STR, DA_CLR
+                endcase
+            end
+            S_DA_IMM: begin operand<=din; pc<=pc+16'd2; state<=S_DA_WR; end
+            S_DA_RD:  begin
+                if (daop==DA_LDR) R[dst]<=din;
+                else fcw<=(fcw & ~(MZ|MS)) | ((din==0)?MZ:0) | (din[15]?MS:0);  // TEST
+                retire<=1'b1; state<=S_FETCH0;
+            end
+            S_DA_WR:  begin retire<=1'b1; state<=S_FETCH0; end
 
             // ---- SLL(+)/SRL(-) rd,#imm16 (flags CZS) ----
             S_SHIFT: begin
