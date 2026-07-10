@@ -2,224 +2,269 @@
 //  z8002.sv  —  Zilog Z8002 (non-segmented Z8000) CPU core
 //  Greenfield core for Arcade-PolePosition_MiSTer.  SystemVerilog, Verilator-clean.
 //
-//  References (in "Useful Stuff/"):
-//    - MAME z8000ops.hxx / z8000tbl.hxx / z8000cpu.h  (behavioral oracle)
-//    - Z8000 Technical Manual.pdf, The Z8000 Handbook.pdf
+//  References: MAME z8000ops.hxx / z8000tbl.hxx / z8000cpu.h (behavioral oracle).
 //
-//  Baked-in architecture (verified vs MAME z8000cpu.h):
-//    - BIG-ENDIAN.  Word@A = {mem[A] high, mem[A+1] low}.  PC even.  SP=R15.
-//    - 16x16 register file with byte overlays: byte reg n -> R[n&7], HIGH if n<8
-//      else LOW.  (RH0..RH7 = n 0..7, RL0..RL7 = n 8..15.)
-//    - FCW: C=b7 Z=b6 S=b5 P/V=b4 DA=b3 H=b2 ; ctrl S/N=b14 VIE=b12 NVIE=b11.
-//    - Reset reads FCW from mem[2], PC from mem[4] (PSA reset area).
+//  Baked-in (verified vs MAME): BIG-ENDIAN (word@A={mem[A]hi,mem[A+1]lo}); PC even;
+//  SP=R15; 16x16 regfile, byte reg n -> R[n&7] HIGH if n<8 else LOW; FCW C=b7 Z=b6
+//  S=b5 P/V=b4 DA=b3 H=b2 ; reset reads FCW@mem[2], PC@mem[4].
 //
-//  STATUS: bring-up.  Implemented (encodings/flags copied from MAME z8000ops.hxx):
-//    LD rd,#imm16 (0x210d) | CLR rd (0x8Dd8) | ADDB rd,@rs (0x00, src!=0) |
-//    INC rd,#n (0xA9) | INCB rbd,#n (0xA8) | DJNZ/DBJNZ (0xF, bit7=w) | JR cc (0xE)
-//  Enough for the sub1 ROM-checksum self-test.  Undecoded opcode -> S_ILLEGAL.
+//  MICROSEQUENCER: S_FETCH0 decodes -> operand from reg (latched) / imm (S_IMM) /
+//  mem (S_MEMRD) -> S_ALU applies aluop.  Stores via S_MEMWR.  Shifts S_SHIFT,
+//  jumps S_JP.  Byte ADDB@rs keeps its own S_ADDB_RD.  Undecoded op -> S_ILLEGAL.
+//
+//  STATUS: runs sub1 ROM checksum self-test + init.  Opcodes (encodings/flags from
+//  z8000ops.hxx): LD #imm/@rs/rs, CLR, ADDB@rs, INC, INCB, DJNZ/DBJNZ, JR cc,
+//  ADD/SUB/AND/OR/XOR/CP (rs / #imm / @rs, word), SLL/SRL #imm, LD @rd,rs, JP cc.
 // ============================================================================
 
 module z8002
 (
-    input  wire        clk,
-    input  wire        ce,
-    input  wire        reset_n,
-
+    input  wire        clk, ce, reset_n,
     output wire [15:0] addr,
     output wire [15:0] dout,
     input  wire [15:0] din,
-    output wire        mreq,
-    output wire        iorq,
-    output wire        we,
-    output wire        wordacc,
-    input  wire        wait_n,
-
-    input  wire        nmi_n,
-    input  wire        nvi_n,
-    input  wire        vi_n,
-
-    output wire [15:0]  dbg_pc,
-    output wire [15:0]  dbg_fcw,
-    output wire [15:0]  dbg_ir,
-    output wire         dbg_retire,
-    output wire         dbg_illegal,
+    output wire        mreq, iorq, we, wordacc,
+    input  wire        wait_n, nmi_n, nvi_n, vi_n,
+    output wire [15:0]  dbg_pc, dbg_fcw, dbg_ir,
+    output wire         dbg_retire, dbg_illegal,
     output wire [255:0] dbg_regs
 );
+    // FCW flag masks
+    localparam [15:0] MC=16'h0080, MZ=16'h0040, MS=16'h0020, MV=16'h0010,
+                      MDA=16'h0008, MH=16'h0004;
+    localparam integer FC=7, FZ=6, FS=5, FV=4, FH=2;
+    // ALU ops
+    localparam [2:0] LD=0, ADD=1, SUB=2, AND=3, OR=4, XOR=5, CP=6;
 
-    // FCW flag bit indices
-    localparam integer FC = 7, FZ = 6, FS = 5, FV = 4, FDA = 3, FH = 2;
-
-    // Architectural state
     reg [15:0] R [0:15];
-    reg [15:0] pc, fcw, ir;
-    reg [3:0]  dst, src;        // latched operand fields
+    reg [15:0] pc, fcw, ir, operand;
+    reg [3:0]  dst, src;
+    reg [2:0]  aluop;
     reg        retire, illegal;
 
-    // FSM
-    localparam [2:0] S_RST_FCW = 3'd0, S_RST_PC = 3'd1, S_FETCH0 = 3'd2,
-                     S_LDI_IMM = 3'd3, S_ADDB_RD = 3'd4, S_ILLEGAL = 3'd5;
-    reg [2:0] state;
+    localparam [3:0] S_RST_FCW=0, S_RST_PC=1, S_FETCH0=2, S_IMM=3, S_MEMRD=4,
+                     S_ALU=5, S_MEMWR=6, S_SHIFT=7, S_JP=8, S_ADDB_RD=9, S_ILLEGAL=10;
+    reg [3:0] state;
 
-    // Address source (combinational). Data byte reads use word-aligned address.
-    assign addr = (state == S_RST_FCW) ? 16'h0002 :
-                  (state == S_RST_PC ) ? 16'h0004 :
-                  (state == S_ADDB_RD) ? (R[src] & 16'hFFFE) :
-                                         pc;
-    assign mreq    = (state != S_ILLEGAL);
+    assign addr = (state==S_RST_FCW) ? 16'h0002 :
+                  (state==S_RST_PC ) ? 16'h0004 :
+                  (state==S_ADDB_RD) ? (R[src] & 16'hFFFE) :
+                  (state==S_MEMRD  ) ? (R[src] & 16'hFFFE) :
+                  (state==S_MEMWR  ) ?  R[dst] :
+                                        pc;
+    assign mreq    = (state!=S_ILLEGAL);
     assign iorq    = 1'b0;
-    assign we      = 1'b0;
-    assign wordacc = (state != S_ADDB_RD);   // ADDB @rs is a byte access
-    assign dout    = 16'h0000;
+    assign we      = (state==S_MEMWR);
+    assign wordacc = (state!=S_ADDB_RD);
+    assign dout    = (state==S_MEMWR) ? R[src] : 16'h0000;
 
-    assign dbg_pc = pc; assign dbg_fcw = fcw; assign dbg_ir = ir;
-    assign dbg_retire = retire; assign dbg_illegal = illegal;
-    assign dbg_regs = { R[15],R[14],R[13],R[12],R[11],R[10],R[ 9],R[ 8],
-                        R[ 7],R[ 6],R[ 5],R[ 4],R[ 3],R[ 2],R[ 1],R[ 0] };
+    assign dbg_pc=pc; assign dbg_fcw=fcw; assign dbg_ir=ir;
+    assign dbg_retire=retire; assign dbg_illegal=illegal;
+    assign dbg_regs = { R[15],R[14],R[13],R[12],R[11],R[10],R[9],R[8],
+                        R[7],R[6],R[5],R[4],R[3],R[2],R[1],R[0] };
 
-    // ---- condition-code evaluation (z8000cpu.h CC0..CCF) ----
-    function automatic cc_true(input [3:0] cc,
-                               input c, input z, input s, input pv);
+    function automatic cc_true(input [3:0] cc, input c, input z, input s, input pv);
         case (cc)
-            4'h0: cc_true = 1'b0;
-            4'h1: cc_true = pv ^ s;
-            4'h2: cc_true = z | (pv ^ s);
-            4'h3: cc_true = z | c;
-            4'h4: cc_true = pv;
-            4'h5: cc_true = s;
-            4'h6: cc_true = z;
-            4'h7: cc_true = c;
-            4'h8: cc_true = 1'b1;
-            4'h9: cc_true = ~(pv ^ s);
-            4'hA: cc_true = ~(z | (pv ^ s));
-            4'hB: cc_true = ~(z | c);
-            4'hC: cc_true = ~pv;
-            4'hD: cc_true = ~s;
-            4'hE: cc_true = ~z;
-            4'hF: cc_true = ~c;
+            4'h0: cc_true=1'b0;          4'h8: cc_true=1'b1;
+            4'h1: cc_true=pv^s;          4'h9: cc_true=~(pv^s);
+            4'h2: cc_true=z|(pv^s);      4'hA: cc_true=~(z|(pv^s));
+            4'h3: cc_true=z|c;           4'hB: cc_true=~(z|c);
+            4'h4: cc_true=pv;            4'hC: cc_true=~pv;
+            4'h5: cc_true=s;             4'hD: cc_true=~s;
+            4'h6: cc_true=z;             4'hE: cc_true=~z;
+            4'h7: cc_true=c;             4'hF: cc_true=~c;
         endcase
     endfunction
 
     // combinational scratch
-    reg  [7:0] dbyte;          // current dst byte-register value
-    reg  [8:0] add8;           // 9-bit byte add (carry in [8])
-    reg  [7:0] operand;        // memory byte operand for ADDB @rs
-    reg  [16:0] incw_sum;
-    reg  [8:0]  incb_sum;
-    reg  [3:0]  incn;
-    reg  [15:0] pc2, disp2;
-    reg  vflag, hflag;
+    reg [15:0] pc2, disp2;
+    reg [8:0]  add8, incb_sum;
+    reg [16:0] incw_sum, sum17, dif17;
+    reg [15:0] a16, res16, fmask, fval, scnt;
+    reg [7:0]  dbyte, operand_b;
+    reg [4:0]  cnt;
+    reg [3:0]  incn;
+    reg        z,s,v,c,h,wb, cbit;
 
     integer i;
     always @(posedge clk) begin
         if (!reset_n) begin
-            pc <= 0; fcw <= 0; ir <= 0; dst <= 0; src <= 0;
-            retire <= 1'b0; illegal <= 1'b0; state <= S_RST_FCW;
-            for (i = 0; i < 16; i = i + 1) R[i] <= 16'h0000;
-        end
-        else if (ce) begin
+            pc<=0; fcw<=0; ir<=0; dst<=0; src<=0; aluop<=0; operand<=0;
+            retire<=0; illegal<=0; state<=S_RST_FCW;
+            for (i=0;i<16;i=i+1) R[i]<=16'h0000;
+        end else if (ce) begin
             retire <= 1'b0;
             pc2 = pc + 16'd2;
             case (state)
-                S_RST_FCW: begin fcw <= din; state <= S_RST_PC; end
-                S_RST_PC:  begin pc  <= din; state <= S_FETCH0; end
+            S_RST_FCW: begin fcw<=din; state<=S_RST_PC; end
+            S_RST_PC:  begin pc <=din; state<=S_FETCH0; end
 
-                S_FETCH0: begin
-                    ir <= din;
-
-                    // ---- LD rd,#imm16 : 0x210d ----
-                    if (din[15:8] == 8'h21 && din[7:4] == 4'h0) begin
-                        dst <= din[3:0]; pc <= pc2; state <= S_LDI_IMM;
-                    end
-                    // ---- CLR rd : 0x8Dd8 (no flags) ----
-                    else if (din[15:8] == 8'h8D && din[3:0] == 4'h8) begin
-                        R[din[7:4]] <= 16'h0000; pc <= pc2; retire <= 1'b1;
-                    end
-                    // ---- ADDB rd,@rs : 0x00, src(rs)=NIB2 != 0 ----
-                    else if (din[15:8] == 8'h00 && din[7:4] != 4'h0) begin
-                        src <= din[7:4]; dst <= din[3:0]; pc <= pc2;
-                        state <= S_ADDB_RD;
-                    end
-                    // ---- INC rd,#n : 0xA9 (word, ZSV) ----
-                    else if (din[15:8] == 8'hA9) begin
-                        incn     = din[3:0] + 4'd1;              // i4p1 (1..16)
-                        incw_sum = {1'b0, R[din[7:4]]} + {13'd0, incn};
-                        vflag    = (~incw_sum[15] & ~R[din[7:4]][15] & 1'b0)   // n[15]=0
-                                 | ( 1'b0        &  R[din[7:4]][15] & ~incw_sum[15]);
-                        // MAME CHK_ADDW_V with value(n) high bit = 0:
-                        vflag    = (~R[din[7:4]][15]) & incw_sum[15];
-                        R[din[7:4]] <= incw_sum[15:0];
-                        fcw <= (fcw & ~((1<<FZ)|(1<<FS)|(1<<FV)))
-                             | ((incw_sum[15:0]==0) << FZ)
-                             | (incw_sum[15]        << FS)
-                             | (vflag               << FV);
-                        pc <= pc2; retire <= 1'b1;
-                    end
-                    // ---- INCB rbd,#n : 0xA8 (byte, ZSV) ----
-                    else if (din[15:8] == 8'hA8) begin
-                        incn    = din[3:0] + 4'd1;
-                        dbyte   = din[7] ? R[din[6:4]][7:0] : R[din[6:4]][15:8];
-                        incb_sum = {1'b0, dbyte} + {5'd0, incn};
-                        vflag   = (~dbyte[7]) & incb_sum[7];   // n high bit = 0
-                        if (din[7]) R[din[6:4]][7:0]  <= incb_sum[7:0];
-                        else        R[din[6:4]][15:8] <= incb_sum[7:0];
-                        fcw <= (fcw & ~((1<<FZ)|(1<<FS)|(1<<FV)))
-                             | ((incb_sum[7:0]==0) << FZ)
-                             | (incb_sum[7]        << FS)
-                             | (vflag              << FV);
-                        pc <= pc2; retire <= 1'b1;
-                    end
-                    // ---- DJNZ/DBJNZ : 0xF, reg=NIB1, w=bit7, dsp7=[6:0] ----
-                    else if (din[15:12] == 4'hF) begin
-                        disp2 = {8'd0, din[6:0], 1'b0};          // 2*dsp7
-                        if (din[7]) begin                        // DJNZ (word)
-                            R[din[11:8]] <= R[din[11:8]] - 16'd1;
-                            pc <= (R[din[11:8]] - 16'd1 != 0) ? (pc2 - disp2) : pc2;
-                        end else begin                           // DBJNZ (byte)
-                            if (din[11]) R[din[10:8]][7:0]  <= R[din[10:8]][7:0]  - 8'd1;
-                            else         R[din[10:8]][15:8] <= R[din[10:8]][15:8] - 8'd1;
-                            pc <= pc2;   // byte form unused by boot; branch added when needed
-                        end
-                        retire <= 1'b1;
-                    end
-                    // ---- JR cc,dsp8 : 0xE (signed, no flags) ----
-                    else if (din[15:12] == 4'hE) begin
-                        disp2 = {{7{din[7]}}, din[7:0], 1'b0};   // 2*signext(dsp8)
-                        if (cc_true(din[11:8], fcw[FC], fcw[FZ], fcw[FS], fcw[FV]))
-                             pc <= pc2 + disp2;
-                        else pc <= pc2;
-                        retire <= 1'b1;
-                    end
-                    else begin
-                        illegal <= 1'b1; state <= S_ILLEGAL;
-                    end
+            S_FETCH0: begin
+                ir <= din;
+                // ---- CLR rd (0x8Dd8, no flags) ----
+                if (din[15:8]==8'h8D && din[3:0]==4'h8) begin
+                    R[din[7:4]]<=16'h0000; pc<=pc2; retire<=1'b1;
                 end
-
-                // ---- LD rd,#imm16 second word ----
-                S_LDI_IMM: begin
-                    R[dst] <= din; pc <= pc + 16'd2; retire <= 1'b1; state <= S_FETCH0;
+                // ---- LD rd,#imm16 (0x210d) / LD rd,@rs (0x21, src!=0) ----
+                else if (din[15:8]==8'h21) begin
+                    dst<=din[3:0]; aluop<=LD; pc<=pc2;
+                    if (din[7:4]==0) state<=S_IMM;
+                    else begin src<=din[7:4]; state<=S_MEMRD; end
                 end
-
-                // ---- ADDB rd,@rs data read + add (flags CZSVH, DA=0) ----
-                S_ADDB_RD: begin
-                    operand = R[src][0] ? din[7:0] : din[15:8];         // big-endian byte
-                    dbyte   = dst[3] ? R[dst[2:0]][7:0] : R[dst[2:0]][15:8];
-                    add8    = {1'b0, dbyte} + {1'b0, operand};
-                    vflag   = ( operand[7] &  dbyte[7] & ~add8[7])
-                            | (~operand[7] & ~dbyte[7] &  add8[7]);
-                    hflag   = (add8[3:0] < dbyte[3:0]);
-                    if (dst[3]) R[dst[2:0]][7:0]  <= add8[7:0];
-                    else        R[dst[2:0]][15:8] <= add8[7:0];
-                    fcw <= (fcw & ~((1<<FC)|(1<<FZ)|(1<<FS)|(1<<FV)|(1<<FDA)|(1<<FH)))
-                         | (add8[8]            << FC)
-                         | ((add8[7:0]==0)     << FZ)
-                         | (add8[7]            << FS)
-                         | (vflag              << FV)
-                         | (hflag              << FH);   // DA stays 0
-                    retire <= 1'b1; state <= S_FETCH0;
+                // ---- reg-reg ALU: A1=LD 81=ADD 83=SUB 85=OR 87=AND 89=XOR 8B=CP ----
+                else if (din[15:8]==8'hA1 || din[15:8]==8'h81 || din[15:8]==8'h83 ||
+                         din[15:8]==8'h85 || din[15:8]==8'h87 || din[15:8]==8'h89 ||
+                         din[15:8]==8'h8B) begin
+                    dst<=din[3:0]; operand<=R[din[7:4]]; pc<=pc2; state<=S_ALU;
+                    case (din[15:8])
+                        8'hA1: aluop<=LD;  8'h81: aluop<=ADD; 8'h83: aluop<=SUB;
+                        8'h85: aluop<=OR;  8'h87: aluop<=AND; 8'h89: aluop<=XOR;
+                        default: aluop<=CP;
+                    endcase
                 end
+                // ---- mem/imm word ALU: 01=ADD 03=SUB 05=OR 07=AND 09=XOR 0B=CP ----
+                else if (din[15:8]==8'h01 || din[15:8]==8'h03 || din[15:8]==8'h05 ||
+                         din[15:8]==8'h07 || din[15:8]==8'h09 || din[15:8]==8'h0B) begin
+                    dst<=din[3:0]; pc<=pc2;
+                    case (din[15:8])
+                        8'h01: aluop<=ADD; 8'h03: aluop<=SUB; 8'h05: aluop<=OR;
+                        8'h07: aluop<=AND; 8'h09: aluop<=XOR; default: aluop<=CP;
+                    endcase
+                    if (din[7:4]==0) state<=S_IMM;
+                    else begin src<=din[7:4]; state<=S_MEMRD; end
+                end
+                // ---- ADDB rd,@rs (0x00, src!=0, byte) ----
+                else if (din[15:8]==8'h00 && din[7:4]!=4'h0) begin
+                    src<=din[7:4]; dst<=din[3:0]; pc<=pc2; state<=S_ADDB_RD;
+                end
+                // ---- LD @rd,rs store (0x2F) : ptr=NIB2, data=NIB3 ----
+                else if (din[15:8]==8'h2F) begin
+                    dst<=din[7:4]; src<=din[3:0]; pc<=pc2; state<=S_MEMWR;
+                end
+                // ---- SLL/SRL rd,#imm (0xB3, NIB3=1) ----
+                else if (din[15:8]==8'hB3 && din[3:0]==4'h1) begin
+                    dst<=din[7:4]; pc<=pc2; state<=S_SHIFT;
+                end
+                // ---- JP cc,addr (0x5E) : cc=NIB3 ----
+                else if (din[15:8]==8'h5E) begin
+                    src<=din[3:0]; pc<=pc2; state<=S_JP;
+                end
+                // ---- INC rd,#n (0xA9, word, ZSV) ----
+                else if (din[15:8]==8'hA9) begin
+                    incn=din[3:0]+4'd1; incw_sum={1'b0,R[din[7:4]]}+{13'd0,incn};
+                    v=(~R[din[7:4]][15]) & incw_sum[15];
+                    R[din[7:4]]<=incw_sum[15:0];
+                    fcw<=(fcw & ~(MZ|MS|MV)) | ((incw_sum[15:0]==0)?MZ:0)
+                        | (incw_sum[15]?MS:0) | (v?MV:0);
+                    pc<=pc2; retire<=1'b1;
+                end
+                // ---- INCB rbd,#n (0xA8, byte, ZSV) ----
+                else if (din[15:8]==8'hA8) begin
+                    incn=din[3:0]+4'd1;
+                    dbyte = din[7] ? R[din[6:4]][7:0] : R[din[6:4]][15:8];
+                    incb_sum={1'b0,dbyte}+{5'd0,incn};
+                    v=(~dbyte[7]) & incb_sum[7];
+                    if (din[7]) R[din[6:4]][7:0]<=incb_sum[7:0];
+                    else        R[din[6:4]][15:8]<=incb_sum[7:0];
+                    fcw<=(fcw & ~(MZ|MS|MV)) | ((incb_sum[7:0]==0)?MZ:0)
+                        | (incb_sum[7]?MS:0) | (v?MV:0);
+                    pc<=pc2; retire<=1'b1;
+                end
+                // ---- DJNZ/DBJNZ (0xF, reg=NIB1, w=bit7, no flags) ----
+                else if (din[15:12]==4'hF) begin
+                    disp2={8'd0,din[6:0],1'b0};
+                    if (din[7]) begin
+                        R[din[11:8]]<=R[din[11:8]]-16'd1;
+                        pc<=(R[din[11:8]]-16'd1!=0) ? (pc2-disp2) : pc2;
+                    end else begin
+                        if (din[11]) R[din[10:8]][7:0] <=R[din[10:8]][7:0] -8'd1;
+                        else         R[din[10:8]][15:8]<=R[din[10:8]][15:8]-8'd1;
+                        pc<=pc2;
+                    end
+                    retire<=1'b1;
+                end
+                // ---- JR cc,dsp8 (0xE, signed, no flags) ----
+                else if (din[15:12]==4'hE) begin
+                    disp2={{7{din[7]}},din[7:0],1'b0};
+                    pc<=cc_true(din[11:8],fcw[FC],fcw[FZ],fcw[FS],fcw[FV]) ? (pc2+disp2) : pc2;
+                    retire<=1'b1;
+                end
+                else begin illegal<=1'b1; state<=S_ILLEGAL; end
+            end
 
-                S_ILLEGAL: ;
-                default: state <= S_FETCH0;
+            // fetch 2nd word as immediate operand
+            S_IMM:   begin operand<=din; pc<=pc+16'd2; state<=S_ALU; end
+            // read word operand from @rs
+            S_MEMRD: begin operand<=din; state<=S_ALU; end
+
+            // ---- shared word ALU ----
+            S_ALU: begin
+                a16=R[dst]; sum17={1'b0,a16}+{1'b0,operand}; dif17={1'b0,a16}-{1'b0,operand};
+                wb=1'b1; res16=operand; fmask=16'h0000; fval=16'h0000;
+                case (aluop)
+                    LD:  begin res16=operand; end
+                    ADD: begin res16=sum17[15:0];
+                         c=sum17[16]; z=(res16==0); s=res16[15];
+                         v=(~a16[15]&~operand[15]&res16[15])|(a16[15]&operand[15]&~res16[15]);
+                         fmask=MC|MZ|MS|MV; fval=(c?MC:0)|(z?MZ:0)|(s?MS:0)|(v?MV:0); end
+                    SUB, CP: begin res16=dif17[15:0];
+                         c=dif17[16]; z=(res16==0); s=res16[15];
+                         v=(~operand[15]&a16[15]&~res16[15])|(operand[15]&~a16[15]&res16[15]);
+                         fmask=MC|MZ|MS|MV; fval=(c?MC:0)|(z?MZ:0)|(s?MS:0)|(v?MV:0);
+                         if (aluop==CP) wb=1'b0; end
+                    AND: begin res16=a16&operand; z=(res16==0); s=res16[15];
+                         fmask=MZ|MS; fval=(z?MZ:0)|(s?MS:0); end
+                    OR:  begin res16=a16|operand; z=(res16==0); s=res16[15];
+                         fmask=MZ|MS; fval=(z?MZ:0)|(s?MS:0); end
+                    default: begin res16=a16^operand; z=(res16==0); s=res16[15];  // XOR
+                         fmask=MZ|MS; fval=(z?MZ:0)|(s?MS:0); end
+                endcase
+                if (wb) R[dst]<=res16;
+                fcw<=(fcw & ~fmask) | fval;
+                retire<=1'b1; state<=S_FETCH0;
+            end
+
+            // store handled combinationally via addr/dout/we
+            S_MEMWR: begin retire<=1'b1; state<=S_FETCH0; end
+
+            // ---- SLL(+)/SRL(-) rd,#imm16 (flags CZS) ----
+            S_SHIFT: begin
+                a16=R[dst]; scnt = din[15] ? (16'h0000 - din) : din; cnt=scnt[4:0];
+                if (din[15]) begin
+                    res16 = a16 >> cnt;
+                    cbit  = (cnt!=0) ? ((a16 >> (cnt-1)) & 16'h1) : 1'b0;
+                end else begin
+                    res16 = a16 << cnt;
+                    cbit  = (cnt!=0) ? (((a16 << (cnt-1)) & 16'h8000)!=0) : 1'b0;
+                end
+                z=(res16==0); s=res16[15];
+                R[dst]<=res16;
+                fcw<=(fcw & ~(MC|MZ|MS)) | (cbit?MC:0)|(z?MZ:0)|(s?MS:0);
+                pc<=pc+16'd2; retire<=1'b1; state<=S_FETCH0;
+            end
+
+            // ---- JP cc,addr (src holds cc) ----
+            S_JP: begin
+                pc<=cc_true(src,fcw[FC],fcw[FZ],fcw[FS],fcw[FV]) ? din : (pc+16'd2);
+                retire<=1'b1; state<=S_FETCH0;
+            end
+
+            // ---- ADDB rd,@rs (byte, flags CZSVH, DA=0) ----
+            S_ADDB_RD: begin
+                operand_b = R[src][0] ? din[7:0] : din[15:8];
+                dbyte     = dst[3] ? R[dst[2:0]][7:0] : R[dst[2:0]][15:8];
+                add8      = {1'b0,dbyte}+{1'b0,operand_b};
+                v = (operand_b[7]&dbyte[7]&~add8[7])|(~operand_b[7]&~dbyte[7]&add8[7]);
+                h = (add8[3:0] < dbyte[3:0]);
+                if (dst[3]) R[dst[2:0]][7:0] <=add8[7:0];
+                else        R[dst[2:0]][15:8]<=add8[7:0];
+                fcw<=(fcw & ~(MC|MZ|MS|MV|MDA|MH))
+                   | (add8[8]?MC:0)|((add8[7:0]==0)?MZ:0)|(add8[7]?MS:0)|(v?MV:0)|(h?MH:0);
+                retire<=1'b1; state<=S_FETCH0;
+            end
+
+            S_ILLEGAL: ;
+            default: state<=S_FETCH0;
             endcase
         end
     end
@@ -227,5 +272,4 @@ module z8002
     // verilator lint_off UNUSED
     wire _unused = &{1'b0, wait_n, nmi_n, nvi_n, vi_n};
     // verilator lint_on UNUSED
-
 endmodule
