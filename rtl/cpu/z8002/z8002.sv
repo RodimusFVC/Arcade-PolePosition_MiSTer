@@ -33,11 +33,15 @@ module z8002
     localparam [15:0] MC=16'h0080, MZ=16'h0040, MS=16'h0020, MV=16'h0010,
                       MDA=16'h0008, MH=16'h0004;
     localparam integer FC=7, FZ=6, FS=5, FV=4, FH=2;
+    // FCW interrupt-enable masks (MAME z8000cpu.h): F_NVIE=bit11 F_VIE=bit12 F_S_N=bit14
+    localparam [15:0] F_NVIE=16'h0800, F_VIE=16'h1000, F_S_N=16'h4000;
     // ALU ops
     localparam [2:0] LD=0, ADD=1, SUB=2, AND=3, OR=4, XOR=5, CP=6;
 
     reg [15:0] R [0:15];
     reg [15:0] pc, fcw, ir, operand, ea;
+    reg [15:0] psap;           // PSA pointer (control reg, LDCTL psapoff) - reset 0
+    reg        nvi_pending;    // level-latched from nvi_n, cleared on NVI accept
     reg [3:0]  dst, src;
     reg [2:0]  aluop, daop;
     reg        retire, illegal;
@@ -45,26 +49,46 @@ module z8002
     // direct/indirect memory access op (for the EA states)
     localparam [2:0] DA_LDR=0, DA_STR=1, DA_STI=2, DA_CLR=3, DA_TST=4;
 
-    localparam [3:0] S_RST_FCW=0, S_RST_PC=1, S_FETCH0=2, S_IMM=3, S_MEMRD=4,
+    localparam [4:0] S_RST_FCW=0, S_RST_PC=1, S_FETCH0=2, S_IMM=3, S_MEMRD=4,
                      S_ALU=5, S_MEMWR=6, S_SHIFT=7, S_JP=8, S_ADDB_RD=9, S_ILLEGAL=10,
-                     S_DA_FETCH=11, S_DA_IMM=12, S_DA_RD=13, S_DA_WR=14;
-    reg [3:0] state;
+                     S_DA_FETCH=11, S_DA_IMM=12, S_DA_RD=13, S_DA_WR=14,
+                     // NVI accept: push PC/FCW/vec (SP predecrement store x3),
+                     // then read new FCW/PC from the PSA NVI vector (PSAP+0x18/0x1A)
+                     S_NVI_PC=15, S_NVI_FCW=16, S_NVI_VEC=17, S_NVI_RDFCW=18, S_NVI_RDPC=19,
+                     // IRET: pop vec(discard)/FCW/PC (SP postincrement load x3)
+                     S_IRET_VEC=20, S_IRET_FCW=21, S_IRET_PC=22;
+    reg [4:0] state;
 
-    assign addr = (state==S_RST_FCW) ? 16'h0002 :
-                  (state==S_RST_PC ) ? 16'h0004 :
-                  (state==S_ADDB_RD) ? (R[src] & 16'hFFFE) :
-                  (state==S_MEMRD  ) ? (R[src] & 16'hFFFE) :
-                  (state==S_MEMWR  ) ?  R[dst] :
-                  (state==S_DA_RD  ) ?  ea :
-                  (state==S_DA_WR  ) ?  ea :
+    // NVI push / IRET pop addresses: SP=R[15]; pushes pre-decrement (addr=R15-2,
+    // and R15 itself is updated -=2 on the same edge), pops read at current R15
+    // then post-increment (matches MAME PUSHW/POPW exactly).
+    assign addr = (state==S_RST_FCW ) ? 16'h0002 :
+                  (state==S_RST_PC  ) ? 16'h0004 :
+                  (state==S_ADDB_RD ) ? (R[src] & 16'hFFFE) :
+                  (state==S_MEMRD   ) ? (R[src] & 16'hFFFE) :
+                  (state==S_MEMWR   ) ?  R[dst] :
+                  (state==S_DA_RD   ) ?  ea :
+                  (state==S_DA_WR   ) ?  ea :
+                  (state==S_NVI_PC  ) ?  (R[15] - 16'd2) :
+                  (state==S_NVI_FCW ) ?  (R[15] - 16'd2) :
+                  (state==S_NVI_VEC ) ?  (R[15] - 16'd2) :
+                  (state==S_NVI_RDFCW) ? (psap + 16'h0018) :
+                  (state==S_NVI_RDPC) ?  (psap + 16'h001A) :
+                  (state==S_IRET_VEC) ?  R[15] :
+                  (state==S_IRET_FCW) ?  R[15] :
+                  (state==S_IRET_PC ) ?  R[15] :
                                         pc;
     assign mreq    = (state!=S_ILLEGAL);
     assign iorq    = 1'b0;
-    assign we      = (state==S_MEMWR) || (state==S_DA_WR);
+    assign we      = (state==S_MEMWR) || (state==S_DA_WR) ||
+                      (state==S_NVI_PC) || (state==S_NVI_FCW) || (state==S_NVI_VEC);
     assign wordacc = (state!=S_ADDB_RD);
     assign dout    = (state==S_MEMWR) ? R[src] :
                      (state==S_DA_WR) ? (daop==DA_STR ? R[src] :
                                          daop==DA_STI ? operand : 16'h0000) :
+                     (state==S_NVI_PC ) ? pc :
+                     (state==S_NVI_FCW) ? fcw :
+                     (state==S_NVI_VEC) ? 16'h00FF :
                                         16'h0000;
 
     assign dbg_pc=pc; assign dbg_fcw=fcw; assign dbg_ir=ir;
@@ -100,15 +124,25 @@ module z8002
         if (!reset_n) begin
             pc<=0; fcw<=0; ir<=0; dst<=0; src<=0; aluop<=0; operand<=0;
             ea<=0; daop<=0; retire<=0; illegal<=0; state<=S_RST_FCW;
+            psap<=16'h0000; nvi_pending<=1'b0;
             for (i=0;i<16;i=i+1) R[i]<=16'h0000;
         end else if (ce) begin
             retire <= 1'b0;
             pc2 = pc + 16'd2;
+            // level-triggered NVI latch (MAME execute_input_edge_triggered==false for NVI):
+            // set while the line is held low; cleared exactly on accept (S_NVI_RDPC) unless
+            // still held low that same cycle, in which case it correctly re-latches.
+            if (!nvi_n) nvi_pending <= 1'b1;
             case (state)
             S_RST_FCW: begin fcw<=din; state<=S_RST_PC; end
             S_RST_PC:  begin pc <=din; state<=S_FETCH0; end
 
             S_FETCH0: begin
+              // ---- NVI accept (instruction-boundary check, ahead of decode) ----
+              // MAME z8002_device::Interrupt(): (m_irq_req&Z8000_NVI)&&(m_fcw&F_NVIE)
+              if (nvi_pending && ((fcw & F_NVIE)!=16'h0000)) begin
+                  state <= S_NVI_PC;
+              end else begin
                 ir <= din;
                 // ---- CLR rd (0x8Dd8, no flags) ----
                 if (din[15:8]==8'h8D && din[3:0]==4'h8) begin
@@ -239,7 +273,43 @@ module z8002
                     pc<=cc_true(din[11:8],fcw[FC],fcw[FZ],fcw[FS],fcw[FV]) ? (pc2+disp2) : pc2;
                     retire<=1'b1;
                 end
+                // ---- IRET (0x7B00, exact match): pop vec/fcw/pc in sequence ----
+                else if (din==16'h7B00) begin
+                    state<=S_IRET_VEC;
+                end
+                // ---- DI/EI i2 (0x7C00-0x7C07): NIB2=0, bit2 0=DI/1=EI, imm2=din[1:0] ----
+                // MAME: di fcw&=(imm2<<11)|0xe7ff ; ei fcw|=(~imm2<<11)&0x1800
+                // i.e. per interrupt bit: imm2 bit=1 -> leave alone, bit=0 -> act (set/clear)
+                else if (din[15:8]==8'h7C && din[7:3]==5'h00) begin
+                    pc<=pc2; retire<=1'b1;
+                    if (din[2]) begin // EI
+                        if (~din[0]) fcw[11]<=1'b1;   // NVIE
+                        if (~din[1]) fcw[12]<=1'b1;   // VIE
+                    end else begin   // DI
+                        if (~din[0]) fcw[11]<=1'b0;
+                        if (~din[1]) fcw[12]<=1'b0;
+                    end
+                end
+                // ---- LDCTL rd,ctrl (0x7D_0ccc, NIB3 bit3=0): read ctrl reg -> Rd ----
+                else if (din[15:8]==8'h7D && din[3]==1'b0) begin
+                    pc<=pc2; retire<=1'b1;
+                    case (din[2:0])
+                        3'd2: R[din[7:4]]<=fcw;    // FCW
+                        3'd5: R[din[7:4]]<=psap;   // PSAPOFF
+                        default: ; // refresh/nspseg/nspoff not modeled (unused by polepos)
+                    endcase
+                end
+                // ---- LDCTL ctrl,rs (0x7D_1ccc, NIB3 bit3=1): write Rs -> ctrl reg ----
+                else if (din[15:8]==8'h7D && din[3]==1'b1) begin
+                    pc<=pc2; retire<=1'b1;
+                    case (din[2:0])
+                        3'd2: fcw <=R[din[7:4]];   // FCW (plain overwrite; no NSP swap - S_N never toggles in polepos)
+                        3'd5: psap<=R[din[7:4]];   // PSAPOFF
+                        default: ;
+                    endcase
+                end
                 else begin illegal<=1'b1; state<=S_ILLEGAL; end
+              end
             end
 
             // fetch 2nd word as immediate operand
@@ -330,6 +400,21 @@ module z8002
                 retire<=1'b1; state<=S_FETCH0;
             end
 
+            // ---- NVI accept sequence: push PC, push old FCW, push vec tag,
+            //      then load new FCW/PC from the PSA NVI vector (PSAP+0x18/0x1A) ----
+            S_NVI_PC:  begin R[15]<=R[15]-16'd2; state<=S_NVI_FCW;   end  // addr/dout comb: SP-2 <= pc
+            S_NVI_FCW: begin R[15]<=R[15]-16'd2; state<=S_NVI_VEC;   end  // SP-4 <= old fcw
+            S_NVI_VEC: begin R[15]<=R[15]-16'd2; state<=S_NVI_RDFCW; end  // SP-6 <= 16'h00FF
+            S_NVI_RDFCW: begin fcw<=din; state<=S_NVI_RDPC; end          // fcw <= mem[psap+0x18]
+            S_NVI_RDPC:  begin
+                pc<=din; nvi_pending<=1'b0; state<=S_FETCH0;             // pc <= mem[psap+0x1A]
+            end
+
+            // ---- IRET: pop vec(discard), pop FCW, pop PC ----
+            S_IRET_VEC: begin R[15]<=R[15]+16'd2; state<=S_IRET_FCW; end // discard din (tag)
+            S_IRET_FCW: begin fcw<=din; R[15]<=R[15]+16'd2; state<=S_IRET_PC; end
+            S_IRET_PC:  begin pc<=din; R[15]<=R[15]+16'd2; retire<=1'b1; state<=S_FETCH0; end
+
             S_ILLEGAL: ;
             default: state<=S_FETCH0;
             endcase
@@ -337,6 +422,6 @@ module z8002
     end
 
     // verilator lint_off UNUSED
-    wire _unused = &{1'b0, wait_n, nmi_n, nvi_n, vi_n};
+    wire _unused = &{1'b0, wait_n, nmi_n, vi_n};
     // verilator lint_on UNUSED
 endmodule

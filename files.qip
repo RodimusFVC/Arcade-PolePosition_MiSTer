@@ -1,22 +1,27 @@
-set_global_assignment -name VHDL_INPUT_VERSION VHDL_2008
-
-set_global_assignment -name SYSTEMVERILOG_FILE Arcade-Kangaroo.sv
-set_global_assignment -name SYSTEMVERILOG_FILE rtl/Kangaroo.sv
-set_global_assignment -name SYSTEMVERILOG_FILE rtl/Kangaroo_CPU.sv
-set_global_assignment -name SYSTEMVERILOG_FILE rtl/Kangaroo_SND.sv
-
 set_global_assignment -name QIP_FILE rtl/cpu/T80/T80.qip
-set_global_assignment -name QIP_FILE rtl/sound/v_sound.qip
-
-set_global_assignment -name VERILOG_FILE rtl/pause.v
-set_global_assignment -name VERILOG_FILE rtl/nvram.v
+set_global_assignment -name VHDL_FILE rtl/dpram.vhd
+set_global_assignment -name VHDL_FILE rtl/sp_palette_msb.vhd
+set_global_assignment -name VHDL_FILE rtl/sp_palette_lsb.vhd
+set_global_assignment -name VHDL_FILE rtl/sound_seq.vhd
+set_global_assignment -name VHDL_FILE rtl/sound_samples.vhd
+set_global_assignment -name VHDL_FILE rtl/sound_lpf.vhd
+set_global_assignment -name VHDL_FILE rtl/red.vhd
+set_global_assignment -name VHDL_FILE rtl/green.vhd
+set_global_assignment -name VHDL_FILE rtl/blue.vhd
+set_global_assignment -name VHDL_FILE rtl/bg_palette_msb.vhd
+set_global_assignment -name VHDL_FILE rtl/bg_palette_lsb.vhd
+set_global_assignment -name VHDL_FILE rtl/sound_machine.vhd
+# MB88xx MCU (Namco 5xxx) — OUR validated SystemVerilog core, NOT darfpga's mb88.vhd
+# (the VHDL one's BRAM read-after-write hazard was the Kangaroo hang; our combinational-RAM rewrite fixed it).
+# mb88.sv wrapper now matches Xevious's mb88 entity EXACTLY (ena_timer dropped; ÷32 timer tick made
+# internally from `ena`) so it binds to poleposition.vhd's `entity work.mb88` instances unchanged.
+# VERIFY AT COMPILE: Quartus-17 VHDL-instantiates-SystemVerilog binding of `mb88` (fallback = a thin
+# VHDL shim entity `mb88` wrapping mb88_core if the mixed-language bind fails).
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/cpu/mb88_sv/mb88_core.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/cpu/mb88_sv/mb88.sv
+set_global_assignment -name VHDL_FILE rtl/gen_video.vhd
+set_global_assignment -name VHDL_FILE rtl/gen_ram.vhd
+set_global_assignment -name VHDL_FILE rtl/poleposition.vhd
 set_global_assignment -name VERILOG_FILE rtl/hiscore.v
-
-set_global_assignment -name VHDL_FILE rtl/cpu/mb88.vhd
-
-set_global_assignment -name VHDL_FILE rtl/ram_rom/dpram_dc.vhd
-set_global_assignment -name VHDL_FILE rtl/ram_rom/spram.vhd
-set_global_assignment -name SYSTEMVERILOG_FILE rtl/ram_rom/rom_loader.sv
-
-set_global_assignment -name VERILOG_FILE rtl/pll.v
-set_global_assignment -name VERILOG_FILE rtl/pll/pll_0002.v
+set_global_assignment -name VERILOG_FILE rtl/pause.v
+set_global_assignment -name SYSTEMVERILOG_FILE "Arcade-PolePosition.sv"

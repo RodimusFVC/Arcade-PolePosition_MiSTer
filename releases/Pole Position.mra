@@ -1,0 +1,148 @@
+<misterromdescription>
+    <name>Pole Position</name>
+    <region>World</region>
+    <homebrew>no</homebrew>
+    <bootleg>no</bootleg>
+    <version></version>
+    <alternative></alternative>
+    <platform></platform>
+    <series>Pole Position</series>
+    <year>1982</year>
+    <manufacturer>Namco</manufacturer>
+    <category>Driving</category>
+
+    <setname>polepos</setname>
+    <parent>polepos</parent>
+    <mameversion>0270</mameversion>
+    <rbf>PolePosition</rbf>   <!-- TODO Phase-0: qpf/qsf/top rename Kangaroo->PolePosition must land so the build emits PolePosition.rbf -->
+    <about></about>
+
+    <resolution>15kHz</resolution>
+    <rotation>horizontal</rotation>
+    <flip>no</flip>
+
+    <players>1</players>
+
+    <!-- ==================================================================
+         DOWNLOAD LAYOUT (the contract the core-side ROM loader must match).
+         Bytes stream via ioctl_download; ioctl_index selects the section,
+         ioctl_addr resets to 0 at the start of each index.  Region names +
+         sizes taken verbatim from MAME polepos.cpp ROM_START( polepos ).
+
+         index 0  CPU code
+             0x00000  maincpu (Z80)          0x3000
+             0x03000  sub1    (Z8002 #1)     0x4000   16-bit interleaved
+             0x07000  sub2    (Z8002 #2)     0x4000   16-bit interleaved
+         index 1  graphics
+             0x00000  chars                  0x1000
+             0x01000  tiles                  0x1000
+             0x02000  sprites (16x16)        0x4000
+             0x06000  bigsprites (32x32)     0x10000  (has internal 0x2000 gap)
+             0x16000  road                   0x5000
+             0x1B000  scalelut               0x1000
+         index 2  PROMs / colour / timing
+             0x00000  proms                  0x1040
+             0x01040  namco (WSG waveform)   0x0100
+             0x01140  user1 (sync chain)     0x0100
+         (index 3 + 4 are RESERVED by the framework for hiscore config + nvram — do not use)
+         index 5  sound sample ROMs
+             0x00000  engine                 0x4000
+             0x04000  52xx voice             0x8000   (last 0x2000 empty)
+         index 6  Namco 5xxx MCU internal ROMs (MB88 mask ROMs, device zips)
+             0x00000  51xx.bin  0x0400  (namco51.zip)  coin/credit I/O   [Z80 boot]
+             0x00400  53xx.bin  0x0400  (namco53.zip)  steering/DSW I/O  [Z80 boot]
+             0x00800  54xx.bin  0x0400  (namco54.zip)  engine noise      [sound]
+             (52xx voice has NO internal MCU ROM in this set — it plays the external
+              sample ROM in index 3; no namco52.zip exists.)
+         ================================================================== -->
+
+    <!-- Index 0: CPU code — maincpu(Z80) + sub1/sub2(Z8002, big-endian 16-bit) -->
+    <rom index="0" md5="none" zip="polepos.zip">
+        <!-- maincpu (Z80) 0x0000-0x2FFF -->
+        <part crc="c0511173" name="pp3_9.6h"/>
+        <part crc="7174bcb7" name="pp1_10b.5h"/>
+        <!-- sub1 (Z8002 #1) 0x4000, ROM_LOAD16_BYTE: even=HIGH=.8l, odd=LOW=.8m (big-endian).
+             #unverified: interleave map direction — confirm vs the known-good pp_sub1.bin the Z8002 already boots on. -->
+        <interleave output="16">
+            <part crc="fafb9049" name="pp3_2.8l" map="10"/>
+            <part crc="65c1c2c2" name="pp3_1.8m" map="01"/>
+        </interleave>
+        <!-- sub2 (Z8002 #2) 0x4000 -->
+        <interleave output="16">
+            <part crc="acc1ebc3" name="pp3_6.4l" map="10"/>
+            <part crc="46e5c99a" name="pp3_5.4m" map="01"/>
+        </interleave>
+    </rom>
+
+    <!-- Index 1: graphics -->
+    <rom index="1" md5="none" zip="polepos.zip">
+        <!-- chars (alpha) 0x1000 -->
+        <part crc="2e77187e" name="pp3_28.1f"/>
+        <!-- tiles (view) 0x1000 -->
+        <part crc="706e888a" name="pp1_29.1e"/>
+        <!-- sprites 16x16 0x4000 -->
+        <part crc="b52c086b" name="pp3_25.1n"/>
+        <part crc="d24a5707" name="pp3_26.1m"/>
+        <!-- bigsprites 32x32 0x10000: planes0+1 @0x0000/2000/4000, GAP 0x2000, planes2+3 @0x8000/A000/C000 -->
+        <part crc="2e134b46" name="pp1_17.5n"/>
+        <part crc="43ff83e1" name="pp1_19.4n"/>
+        <part crc="5f958eb4" name="pp1_21.3n"/>
+        <part repeat="8192">00</part>
+        <part crc="6f9997d2" name="pp1_18.5m"/>
+        <part crc="ec18075b" name="pp1_20.4m"/>
+        <part crc="1d2f30b1" name="pp1_22.3m"/>
+        <!-- road 0x5000 -->
+        <part crc="ee6b3315" name="pp1_30.3a"/>
+        <part crc="6d1e7042" name="pp1_31.2a"/>
+        <part crc="4e97f101" name="pp1_32.1a"/>
+        <!-- scalelut (sprite vertical scaling) 0x1000 -->
+        <part crc="a61bff15" name="pp1_27.1l"/>
+    </rom>
+
+    <!-- Index 2: PROMs (palette / colour / vertical-position / decoders) + WSG waveform + sync -->
+    <rom index="2" md5="none" zip="polepos.zip">
+        <part crc="f07ff2ad" name="pp1-7.8l"/>    <!-- red palette   0x000 -->
+        <part crc="adbde7d7" name="pp1-8.9l"/>    <!-- green palette 0x100 -->
+        <part crc="ddac786a" name="pp1-9.10l"/>   <!-- blue palette  0x200 -->
+        <part crc="1e8d0491" name="pp2-10.2h"/>   <!-- alpha colour  0x300 -->
+        <part crc="0e4fe8a0" name="pp1-11.4d"/>   <!-- bg colour     0x400 -->
+        <part crc="2d502464" name="pp1-15.9a"/>   <!-- vpos low      0x500 -->
+        <part crc="027aa62c" name="pp1-16.10a"/>  <!-- vpos med      0x600 -->
+        <part crc="1f8d0df3" name="pp1-17.11a"/>  <!-- vpos hi       0x700 -->
+        <part crc="7afc7cfc" name="pp1-12.3c"/>   <!-- road colour   0x800 (0x400) -->
+        <part crc="63fb6057" name="pp3-6.6m"/>    <!-- sprite colour 0xC00 (0x400) -->
+        <part crc="4330a51b" name="pp1-13.8e"/>   <!-- vram addr dec 0x1000 (0x20) -->
+        <part crc="4330a51b" name="pp1-14.9e"/>   <!-- vram addr dec 0x1020 (0x20) -->
+        <part crc="8568decc" name="pp1-5.3b"/>    <!-- namco WSG waveform 0x100 -->
+        <part crc="2401c817" name="pp1-4.9h"/>    <!-- user1 sync chain   0x100 -->
+    </rom>
+
+    <!-- Index 5: sound sample ROMs (indices 3+4 reserved for hiscore/nvram) -->
+    <rom index="5" md5="none" zip="polepos.zip">
+        <!-- engine sound 0x4000 -->
+        <part crc="b5ad4d5f" name="pp1_15.6a"/>
+        <part crc="8fdd2f6f" name="pp1_16.5a"/>
+        <!-- 52xx voice 0x8000 (3x0x2000 loaded, last 0x2000 empty) -->
+        <part crc="5b4cf05e" name="pp2_11.2e"/>
+        <part crc="32b694c2" name="pp2_12.2f"/>
+        <part crc="8842138a" name="pp2_13.1e"/>
+        <part repeat="8192">00</part>
+    </rom>
+
+    <!-- Index 6: Namco 5xxx MCU internal mask ROMs (MB88 family). Separate device zips
+         (user-added): namco51/53/54.zip. Each holds one 0x400 file. 51xx+53xx are needed
+         for Z80 boot (coin/DSW/steering I/O); 54xx is engine-noise (sound). -->
+    <rom index="6" md5="none" zip="namco51.zip|namco53.zip|namco54.zip">
+        <part crc="c2f57ef8" name="51xx.bin"/>   <!-- coin/credit I/O -->
+        <part crc="b326fecb" name="53xx.bin"/>   <!-- steering/DSW I/O -->
+        <part crc="ee7357e0" name="54xx.bin"/>   <!-- engine noise -->
+    </rom>
+
+    <!-- TODO: populate <switches> from MAME poleposa INPUT_PORTS (DSWA/DSWB) and
+         <buttons> for the Pole Position controls (accel, brake, gear-shift, steering).
+         Left minimal so ROM loading / Z80 boot can be tested with defaults first. -->
+    <buttons names="Accelerate,Brake,Gear,-,Coin,Start,Pause" default="A,B,X,Y,Select,Start,L"/>
+
+    <remark>Pole Position (Namco, World) — main set. Variants (polepos2, bootlegs) deferred.</remark>
+    <mratimestamp>20260711000000</mratimestamp>
+</misterromdescription>
