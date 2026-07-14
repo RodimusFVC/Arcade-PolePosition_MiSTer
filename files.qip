@@ -1,5 +1,7 @@
 set_global_assignment -name QIP_FILE rtl/cpu/T80/T80.qip
-set_global_assignment -name VHDL_FILE rtl/dpram.vhd
+set_global_assignment -name VHDL_FILE rtl/ram_rom/dpram.vhd
+set_global_assignment -name VHDL_FILE rtl/ram_rom/spram.vhd
+set_global_assignment -name VHDL_FILE rtl/ram_rom/dpram_dc.vhd
 set_global_assignment -name VHDL_FILE rtl/sp_palette_msb.vhd
 set_global_assignment -name VHDL_FILE rtl/sp_palette_lsb.vhd
 set_global_assignment -name VHDL_FILE rtl/sound_seq.vhd
@@ -15,10 +17,22 @@ set_global_assignment -name VHDL_FILE rtl/sound_machine.vhd
 # (the VHDL one's BRAM read-after-write hazard was the Kangaroo hang; our combinational-RAM rewrite fixed it).
 # mb88.sv wrapper now matches Xevious's mb88 entity EXACTLY (ena_timer dropped; ÷32 timer tick made
 # internally from `ena`) so it binds to poleposition.vhd's `entity work.mb88` instances unchanged.
-# VERIFY AT COMPILE: Quartus-17 VHDL-instantiates-SystemVerilog binding of `mb88` (fallback = a thin
-# VHDL shim entity `mb88` wrapping mb88_core if the mixed-language bind fails).
+# RESOLVED 2026-07-13: the `entity work.mb88` direct-entity bind FAILED (Error 10481). poleposition.vhd now uses a
+# VHDL `component mb88` declaration + component instantiation (the reliable Q17 VHDL-instantiates-SV path); SV core
+# is NOT renamed, so the mb88 verilator co-sim is unaffected.
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/cpu/mb88_sv/mb88_core.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/cpu/mb88_sv/mb88.sv
+# Part-2 alpha renderer (pp_tile_decode/pp_tile_layer are permanent; pp_alpha_bringup
+# is the DIAG-REVERT-2026-07-13 step-3a HW bring-up scaffold — remove after first-light test)
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/pp_tile_decode.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/pp_tile_layer.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/pp_palette_alpha.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/pp_alpha_bringup.sv
+# STEP-3 CPU subsystem: Z80 maincpu + 2x Z8002 game CPUs + shared VRAM (replaces
+# the removed Xevious 3-Z80 muxed-bus section). Instantiated by poleposition.vhd.
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/cpu/z8002/z8002.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/PolePosition_subcpu.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/PolePosition_CPU.sv
 set_global_assignment -name VHDL_FILE rtl/gen_video.vhd
 set_global_assignment -name VHDL_FILE rtl/gen_ram.vhd
 set_global_assignment -name VHDL_FILE rtl/poleposition.vhd

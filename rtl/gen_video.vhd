@@ -113,12 +113,16 @@ begin
 		elsif vcntReg = (vsync_base+17-263) and (v_offset) >= 263-250-17 then vsync <= '0';
 		end if;
 
-		if    hcntReg = (448+16+8+1) then hblank <= '1';
-		elsif hcntReg = (192-16+8+1) then hblank <= '0';
+		-- Screen-position trim vs MAME (2026-07-14, HW-tuned): shift picture LEFT 2,
+		-- DOWN 2 via the visible-window (blank) compares. H start +N = left N (base
+		-- was +1; now +3 = 2 px further left, HW-confirmed V already correct at +0
+		-- = down 2). screen-x grows with hcnt, screen-y with vcnt.
+		if    hcntReg = (448+16+8+3) then hblank <= '1';
+		elsif hcntReg = (192-16+8+3) then hblank <= '0';
 		end if;
 
-		if    vcntReg = (240+2) then vblank <= '1';
-		elsif vcntReg = (016+2) then vblank <= '0';
+		if    vcntReg = (240+0) then vblank <= '1';
+		elsif vcntReg = (016+0) then vblank <= '0';
 		end if;
 
 		blankn <= not (hblank or vblank);

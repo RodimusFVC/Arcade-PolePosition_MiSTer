@@ -73,8 +73,12 @@ module pp_tile_decode
     //     pixel(x) = { byte[(x&3)+4], byte[x&3] }   (plane1 = MSB, plane0 = LSB)
     //   x<4 -> left byte, x>=4 -> right byte  (col[2] selects the half).
     wire [7:0] sel_byte = col[2] ? gfx_byte_r : gfx_byte_l;
-    assign pixel = { sel_byte[{1'b1, col[1:0]}],    // plane 1 (bits 4..7)
-                     sel_byte[{1'b0, col[1:0]}] };  // plane 0 (bits 0..3)
+    // Name the nibble bit indices as plain wires. A concatenation used *inside*
+    // a bit-select (`sel_byte[{1'b1,col[1:0]}]`) mis-evaluated for indices 6/7
+    // under Verilator — same hazard as expression bit-selects; name it first.
+    wire [2:0] bit_p0 = {1'b0, col[1:0]};   // plane 0 -> byte bits 0..3
+    wire [2:0] bit_p1 = {1'b1, col[1:0]};   // plane 1 -> byte bits 4..7
+    assign pixel = { sel_byte[bit_p1], sel_byte[bit_p0] };
 
 endmodule
 

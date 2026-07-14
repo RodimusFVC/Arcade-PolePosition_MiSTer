@@ -197,8 +197,10 @@ assign VGA_DISABLE = 0;
 
 wire [1:0] ar = status[20:19];
 
-assign VIDEO_ARX = (!ar) ? ((status[2] ) ? 12'd2880 : 12'd2191) : (ar - 1'd1);
-assign VIDEO_ARY = (!ar) ? ((status[2] ) ? 12'd2191 : 12'd2880) : 12'd0;
+// Pole Position is a HORIZONTAL (ROT0) game. Force landscape aspect; the portrait
+// branch keyed on status[2] was inherited from the Xevious (ROT90) scaffold.
+assign VIDEO_ARX = (!ar) ? 12'd2880 : (ar - 1'd1);
+assign VIDEO_ARY = (!ar) ? 12'd2191 : 12'd0;
 
 // Status Bit Map:
 //              Upper                          Lower
@@ -218,7 +220,6 @@ localparam CONF_STR = {
 	"P1O35,Scandoubler Fx,None,HQ2x,CRT 25%,CRT 50%,CRT 75%;",
 	"P1-;",
 	"H0P1OJK,Aspect ratio,Original,Full Screen,[ARC1],[ARC2];",
-	"H0P1O2,Orientation,Vert,Horz;",
 	"DIP;",
 	"-;",
 	"H1OC,Autosave Hiscores,Off,On;",
@@ -249,12 +250,17 @@ pll pll
 	.refclk(CLK_50M),
 	.rst(0),
 	.outclk_0(clk_sys),
-	.outclk_1(clk_48),
+	//.outclk_1(clk_48) removed — PLL is single-output (49.152 MHz); clk_48 tied to clk_sys below
 	//.outclk_2(clk_12),
 	//.outclk_3(clk_24),
 	//.outclk_4(clk_36),
 	.locked(pll_locked)
 );
+
+// clk_48 is a legacy scaffold name still used by the ce_pix divider + arcade_video
+// (.clk_video). This core is a single 49.152 MHz domain, so tie clk_48 to clk_sys:
+// clk_sys/8 = 49.152/8 = 6.144 MHz ce_pix = Pole Position's exact pixel clock.
+assign clk_48 = clk_sys;
 
 ///////////////////////////////////////////////////
 
@@ -381,16 +387,18 @@ wire rde, rhs, rvs;
 wire [3:0] r,g,b;
 wire [11:0] rgb_out;
 
-reg ce_pix;
-always @(posedge clk_48) begin
-	reg [2:0] div;
-	div <= div + 1'd1;
-	ce_pix <= !div;
-end
+// The core emits pixels on its OWN enable (ce_vid = poleposition.video_en =
+// ena_vidgen, the gen_video/renderer pixel-slot machine). arcade_video MUST sample
+// on that same enable — an independent free-running clk/8 sampler disagrees with the
+// slot machine's non-uniform cadence and double-taps/drops pixels ("2x fat / half
+// char"). ce_vid was declared+driven but left orphaned; wire it straight through.
+wire ce_pix = ce_vid;
 
 wire flip_screen = status[8];
 wire rotate_ccw = flip_screen;
-wire no_rotate = status[2] | direct_video;
+// Pole Position is horizontal (ROT0) — never rotate the framebuffer. The Xevious
+// scaffold defaulted to Vert (status[2]=0 -> rotated); that toggle is now removed.
+wire no_rotate = 1'b1;
 wire video_rotated;
 wire flip = 0;
 
@@ -423,7 +431,30 @@ always @(posedge clk_sys) begin
 end
 
 wire rom_download = ioctl_download & !ioctl_index;
-wire reset = RESET | status[0] | buttons[1] | rom_download | service_trigger | key_reset;
+// Per vault Common-Pitfalls/"Core reset must include ioctl_download": hold the core
+// in reset for the WHOLE multi-index PP download (ioctl_download, not just index-0
+// rom_download), + ~pll_locked as the next-line cold-boot defense.
+wire reset = RESET | status[0] | buttons[1] | ioctl_download | ~pll_locked | service_trigger | key_reset;
+
+// INCR-1a (DIAG-REVERT-2026-07-13): chars (alpha) gfx ROM. MAME polepos "chars" =
+// ioctl INDEX 1, offset 0x0000, 0x1000 bytes (pp3_28.1f, crc 2e77187e). ioctl write
+// gate per vault: index==1 & addr<0x1000; write addr region-relative (ioctl_addr
+// resets to 0 at each index). Sync 1-clk read feeds the alpha renderer's gfx port.
+wire [11:0] chars_gfx_addr;
+reg  [7:0]  chars_gfx_data;
+reg  [7:0]  chars_rom [0:4095];
+wire        chars_wr = ioctl_wr & (ioctl_index == 8'd1) & (ioctl_addr < 25'h1000);
+always @(posedge clk_sys) begin
+	if (chars_wr) chars_rom[ioctl_addr[11:0]] <= ioctl_dout;
+	chars_gfx_data <= chars_rom[chars_gfx_addr];
+end
+
+// Alpha palette PROMs — ioctl INDEX 2, offset 0x000-0x3FF (R@0x000, G@0x100,
+// B@0x200, alpha@0x300; 4x256 bytes). pp_palette_alpha decodes prom_addr[9:8]=table,
+// [7:0]=entry. Region-relative addr (ioctl_addr resets to 0 at each index).
+wire       pp_prom_wr   = ioctl_wr & (ioctl_index == 8'd2) & (ioctl_addr < 25'h400);
+wire [9:0] pp_prom_addr = ioctl_addr[9:0];
+wire [7:0] pp_prom_data = ioctl_dout;
 
 poleposition poleposition
 (
@@ -433,6 +464,13 @@ poleposition poleposition
 	.dn_addr(ioctl_addr[16:0]),
 	.dn_data(ioctl_dout),
 	.dn_wr(ioctl_wr & rom_download),
+
+	.gfx_addr(chars_gfx_addr),
+	.gfx_data(chars_gfx_data),
+
+	.prom_wr(pp_prom_wr),
+	.prom_addr(pp_prom_addr),
+	.prom_data(pp_prom_data),
 
 	.video_r(r),
 	.video_g(g),

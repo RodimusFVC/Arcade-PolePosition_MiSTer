@@ -232,11 +232,58 @@ module PolePosition_subcpu
     wire [10:0] z80_idx11 = vram_addr[10:0];
     wire [9:0]  z80_idx10 = vram_addr[9:0];
 
+    //========================================================================
+    //  MEMORY (BRAM) — 2026-07-14 synthesis rewrite (Quartus Error 276003 fix)
+    //
+    //  The sub ROMs and shared VRAM were behavioral byte-array pairs with
+    //  ASYNC, multi-port (up to 4) combinational reads — a Verilator-friendly
+    //  model that Quartus CANNOT infer as M10K, so ~350 Kbit tried to map to
+    //  flip-flops and overflowed the 5CSEBA6 (Error 276003). See
+    //  [[Sim-model async-read RAM does not infer BRAM]].
+    //
+    //  Rewritten to inferred, REGISTERED-read, <=2-port BRAM using an SV
+    //  template that BOTH Verilator and Quartus M10K accept (no VHDL
+    //  altsyncram, so verilator_subcpu still builds). Arrays stay hi/lo
+    //  byte-split — one full-width write per array => reliable inference,
+    //  no byte-enable, and the Z80's low-byte-only write is just a lo-array
+    //  write with the hi array untouched.
+    //
+    //  PORT BUDGET — how 4 read consumers fit in 2 BRAM ports:
+    //    * Port A = the CPU side (z80 + sub1 + sub2). The three masters are
+    //      time-staggered by the /16 CE divider (sub1 CE=div5, sub2 CE=div10,
+    //      z80 CE~div0) and each HOLDS its bus stable across its whole ~16-clk
+    //      window, so they are TIME-DIVISION muxed onto ONE port by `div` slot
+    //      (z80: div 0..4, sub1: div 5..9, sub2: div 10..15). Each master's
+    //      registered read is latched into a per-master HOLD at the trailing
+    //      slot edge; the hold is stable at that master's NEXT CE. That
+    //      one-CE-period latency is EXACTLY the z8002 contract (addr presented
+    //      at CE N-1, din consumed at CE N — wait_n tied high => no waits),
+    //      and the Z80's multi-T-state read has even more slack.
+    //    * Port B = scanout (registered read). pp_tile_layer consumes the word
+    //      at intra-tile phase p>=2 and scan_addr is constant across the whole
+    //      8-pixel span, so the +1-clk BRAM latency is invisible (verified vs
+    //      pp_tile_layer.sv fetch timing).
+    //
+    //  NOTE: a naive priority mux (z80>sub1>sub2) does NOT work for READS —
+    //  sub1_mreq/sub2_mreq are asserted almost every cycle (mreq=state!=ILLEGAL)
+    //  so priority would permanently starve sub2 (it would read sub1's data).
+    //  Time-division slotting is required.
+    //========================================================================
+
     //------------------------------------------------------------------------
-    //  Sub program ROMs — 8K words each (0x0000-0x3FFF word-addr range),
-    //  hi/lo byte-split so ioctl byte writes never need an array-element
-    //  bit-select. Loaded from the index-0 stream: sub1@0x3000(0x4000 B),
-    //  sub2@0x7000(0x4000 B); even dn_addr=HIGH byte, odd=LOW (big-endian).
+    //  Port-A time-division owner (matches cen_sub1=div5 / cen_sub2=div10).
+    //------------------------------------------------------------------------
+    wire own_z80  = (div <= 4'd4);
+    wire own_sub1 = (div >= 4'd5)  & (div <= 4'd9);
+    wire own_sub2 = (div >= 4'd10);
+
+    //------------------------------------------------------------------------
+    //  Sub program ROMs — 8K words each, hi/lo byte-split SIMPLE-dual-port
+    //  BRAM: write port = index-0 ioctl byte stream (sub1@0x3000/sub2@0x7000,
+    //  even dn_addr=HIGH byte, big-endian); read port = the owning z8002
+    //  (REGISTERED). Dedicated per sub (rom1<->sub1, rom2<->sub2), so no slot
+    //  mux is needed — the read is valid at the sub's CE (addr stable the whole
+    //  window). SDP template: `if(we) mem[waddr]<=wd; q<=mem[raddr];`.
     //------------------------------------------------------------------------
     reg [7:0] rom1_hi [0:8191];
     reg [7:0] rom1_lo [0:8191];
@@ -255,24 +302,28 @@ module PolePosition_subcpu
     wire        sub1_ld_hi  = ~sub1_ld_rel[0];
     wire        sub2_ld_hi  = ~sub2_ld_rel[0];
 
+    reg [7:0] rom1_hi_q, rom1_lo_q, rom2_hi_q, rom2_lo_q;
     always @(posedge clk) begin
-        if (sub1_ld_hit) begin
-            if (sub1_ld_hi) rom1_hi[sub1_ld_idx] <= dn_data;
-            else            rom1_lo[sub1_ld_idx] <= dn_data;
-        end
-        if (sub2_ld_hit) begin
-            if (sub2_ld_hi) rom2_hi[sub2_ld_idx] <= dn_data;
-            else            rom2_lo[sub2_ld_idx] <= dn_data;
-        end
+        // write port A: ioctl byte lane (even dn_addr=HI, odd=LO)
+        if (sub1_ld_hit &  sub1_ld_hi) rom1_hi[sub1_ld_idx] <= dn_data;
+        if (sub1_ld_hit & ~sub1_ld_hi) rom1_lo[sub1_ld_idx] <= dn_data;
+        // read port B: sub1 registered fetch
+        rom1_hi_q <= rom1_hi[sub1_rom_idx];
+        rom1_lo_q <= rom1_lo[sub1_rom_idx];
     end
-
-    wire [15:0] sub1_rom_rd = {rom1_hi[sub1_rom_idx], rom1_lo[sub1_rom_idx]};
-    wire [15:0] sub2_rom_rd = {rom2_hi[sub2_rom_idx], rom2_lo[sub2_rom_idx]};
+    always @(posedge clk) begin
+        if (sub2_ld_hit &  sub2_ld_hi) rom2_hi[sub2_ld_idx] <= dn_data;
+        if (sub2_ld_hit & ~sub2_ld_hi) rom2_lo[sub2_ld_idx] <= dn_data;
+        rom2_hi_q <= rom2_hi[sub2_rom_idx];
+        rom2_lo_q <= rom2_lo[sub2_rom_idx];
+    end
+    wire [15:0] sub1_rom_rd = {rom1_hi_q, rom1_lo_q};
+    wire [15:0] sub2_rom_rd = {rom2_hi_q, rom2_lo_q};
 
     //------------------------------------------------------------------------
-    //  Shared VRAM buffers — hi/lo byte-split, one buffer = one always block
-    //  doing priority-arbitrated writes (Z80 > sub1 > sub2); reads are
-    //  continuous combinational taps per consumer.
+    //  Shared VRAM buffers — hi/lo byte-split TRUE-dual-port BRAM (see the
+    //  MEMORY header above). Port A = CPU side (time-division muxed
+    //  z80/sub1/sub2, read+write); Port B = scanout (registered read).
     //------------------------------------------------------------------------
     reg [7:0] sprite_hi [0:2047];
     reg [7:0] sprite_lo [0:2047];
@@ -283,7 +334,13 @@ module PolePosition_subcpu
     reg [7:0] view_hi   [0:2047];
     reg [7:0] view_lo   [0:2047];
 
+    // Memory zero-init is SIM-ONLY: Verilator has no loop cap, but Quartus
+    // rejects the 8192-iteration loop (Error 10106, 5000-iter synth limit). On
+    // Cyclone V the inferred BRAM config-inits to 0 anyway, and the sub ROMs are
+    // ioctl-loaded (reset held during download) before the Z8002s run — so no
+    // explicit init is needed for HW. Guard with VERILATOR (auto-defined by it).
     integer i;
+`ifdef VERILATOR
     initial begin
         for (i = 0; i < 8192; i = i + 1) begin
             rom1_hi[i] = 8'h00; rom1_lo[i] = 8'h00;
@@ -298,140 +355,130 @@ module PolePosition_subcpu
             alpha_hi[i] = 8'h00; alpha_lo[i] = 8'h00;
         end
     end
+`endif
 
-    // ---- sprite (0x800 words) ----
-    wire z80_we_sprite  = vram_wr & z80_v_sprite;
-    wire sub1_we_sprite = sub1_mem_we & sub1_v_sprite;
-    wire sub2_we_sprite = sub2_mem_we & sub2_v_sprite;
-    // DIAG-REVERT-2026-07-12: original priority-arbitrated single write port
-    // (Z80 > sub1 > sub2) silently DROPPED a sub2 write whenever sub1 wrote
-    // to this same buffer (any index) in the same clock -- confirmed by bisect
-    // (verilator_subcpu vs verilator/z8002.sv): sub2's ROM checksum passes
-    // identically in both co-sims, but sub2's VRAM write/read-back pattern
-    // test at 0x287E/0x2880 (see pp_sub2.asm) only fails when sub1 runs
-    // concurrently; holding sub1 in reset let sub2 run past it cleanly. Real
-    // dual-port VRAM has independent write ports per master for non-conflicting
-    // addresses, so give each writer (Z80/sub1/sub2) its own always block
-    // instead of chaining them behind one if/else-if (only same-cycle+
-    // same-index writes from two masters remain a genuine, rare race, same
-    // as real hardware would have).
-    // always @(posedge clk) begin
-    //     if (z80_we_sprite)
-    //         sprite_lo[z80_idx11] <= vram_dout;
-    //     else if (sub1_we_sprite) begin
-    //         sprite_hi[sub1_idx11] <= sub1_dout[15:8];
-    //         sprite_lo[sub1_idx11] <= sub1_dout[7:0];
-    //     end else if (sub2_we_sprite) begin
-    //         sprite_hi[sub2_idx11] <= sub2_dout[15:8];
-    //         sprite_lo[sub2_idx11] <= sub2_dout[7:0];
-    //     end
-    // end
-    always @(posedge clk) if (z80_we_sprite) sprite_lo[z80_idx11] <= vram_dout;
-    always @(posedge clk) if (sub1_we_sprite) begin
-        sprite_hi[sub1_idx11] <= sub1_dout[15:8];
-        sprite_lo[sub1_idx11] <= sub1_dout[7:0];
-    end
-    always @(posedge clk) if (sub2_we_sprite) begin
-        sprite_hi[sub2_idx11] <= sub2_dout[15:8];
-        sprite_lo[sub2_idx11] <= sub2_dout[7:0];
-    end
-    wire [15:0] sprite_rd_sub1 = {sprite_hi[sub1_idx11], sprite_lo[sub1_idx11]};
-    wire [15:0] sprite_rd_sub2 = {sprite_hi[sub2_idx11], sprite_lo[sub2_idx11]};
-    wire  [7:0] sprite_rd_z80  = sprite_lo[z80_idx11];
-    wire [15:0] sprite_rd_scan = {sprite_hi[scan_sprite_addr], sprite_lo[scan_sprite_addr]};
+    //------------------------------------------------------------------------
+    //  Shared Port-A (CPU-side) controls — selected by the current `div` slot
+    //  owner. Address widths: sprite/view = 11-bit, road/alpha = 10-bit. The
+    //  Z80 writes the LOW byte only (polepos_v.cpp byte lane) => it drives the
+    //  lo-array write-enable but never the hi array; the z8002s write the full
+    //  word. Writes are idempotent across the owner's whole slot (bus held
+    //  stable), so no edge alignment is assumed.
+    //------------------------------------------------------------------------
+    wire [10:0] pa_addr11 = own_z80 ? z80_idx11 : own_sub1 ? sub1_idx11 : sub2_idx11;
+    wire  [9:0] pa_addr10 = own_z80 ? z80_idx10 : own_sub1 ? sub1_idx10 : sub2_idx10;
+    wire  [7:0] pa_wdlo   = own_z80 ? vram_dout : own_sub1 ? sub1_dout[7:0]  : sub2_dout[7:0];
+    wire  [7:0] pa_wdhi   =              own_sub1 ? sub1_dout[15:8] : sub2_dout[15:8]; // z80 n/a
 
-    // ---- road (0x400 words) ----
-    wire z80_we_road  = vram_wr & z80_v_road;
-    wire sub1_we_road = sub1_mem_we & sub1_v_road;
-    wire sub2_we_road = sub2_mem_we & sub2_v_road;
-    // DIAG-REVERT-2026-07-12: same fix as sprite buffer above -- independent
-    // per-writer always blocks instead of one priority-arbitrated block.
-    // always @(posedge clk) begin
-    //     if (z80_we_road)
-    //         road_lo[z80_idx10] <= vram_dout;
-    //     else if (sub1_we_road) begin
-    //         road_hi[sub1_idx10] <= sub1_dout[15:8];
-    //         road_lo[sub1_idx10] <= sub1_dout[7:0];
-    //     end else if (sub2_we_road) begin
-    //         road_hi[sub2_idx10] <= sub2_dout[15:8];
-    //         road_lo[sub2_idx10] <= sub2_dout[7:0];
-    //     end
-    // end
-    always @(posedge clk) if (z80_we_road) road_lo[z80_idx10] <= vram_dout;
-    always @(posedge clk) if (sub1_we_road) begin
-        road_hi[sub1_idx10] <= sub1_dout[15:8];
-        road_lo[sub1_idx10] <= sub1_dout[7:0];
-    end
-    always @(posedge clk) if (sub2_we_road) begin
-        road_hi[sub2_idx10] <= sub2_dout[15:8];
-        road_lo[sub2_idx10] <= sub2_dout[7:0];
-    end
-    wire [15:0] road_rd_sub1 = {road_hi[sub1_idx10], road_lo[sub1_idx10]};
-    wire [15:0] road_rd_sub2 = {road_hi[sub2_idx10], road_lo[sub2_idx10]};
-    wire  [7:0] road_rd_z80  = road_lo[z80_idx10];
-    wire [15:0] road_rd_scan = {road_hi[scan_road_addr], road_lo[scan_road_addr]};
+    // per-buffer Port-A write enables (owner writing AND targeting that buffer)
+    wire we_sprite_lo = (own_z80 & vram_wr & z80_v_sprite) | (own_sub1 & sub1_mem_we & sub1_v_sprite) | (own_sub2 & sub2_mem_we & sub2_v_sprite);
+    wire we_sprite_hi =                                       (own_sub1 & sub1_mem_we & sub1_v_sprite) | (own_sub2 & sub2_mem_we & sub2_v_sprite);
+    wire we_road_lo   = (own_z80 & vram_wr & z80_v_road)   | (own_sub1 & sub1_mem_we & sub1_v_road)   | (own_sub2 & sub2_mem_we & sub2_v_road);
+    wire we_road_hi   =                                       (own_sub1 & sub1_mem_we & sub1_v_road)   | (own_sub2 & sub2_mem_we & sub2_v_road);
+    wire we_alpha_lo  = (own_z80 & vram_wr & z80_v_alpha)  | (own_sub1 & sub1_mem_we & sub1_v_alpha)  | (own_sub2 & sub2_mem_we & sub2_v_alpha);
+    wire we_alpha_hi  =                                       (own_sub1 & sub1_mem_we & sub1_v_alpha)  | (own_sub2 & sub2_mem_we & sub2_v_alpha);
+    wire we_view_lo   = (own_z80 & vram_wr & z80_v_view)   | (own_sub1 & sub1_mem_we & sub1_v_view)   | (own_sub2 & sub2_mem_we & sub2_v_view);
+    wire we_view_hi   =                                       (own_sub1 & sub1_mem_we & sub1_v_view)   | (own_sub2 & sub2_mem_we & sub2_v_view);
 
-    // ---- alpha (0x400 words) ----
-    wire z80_we_alpha  = vram_wr & z80_v_alpha;
-    wire sub1_we_alpha = sub1_mem_we & sub1_v_alpha;
-    wire sub2_we_alpha = sub2_mem_we & sub2_v_alpha;
-    // DIAG-REVERT-2026-07-12: same fix as sprite buffer above -- independent
-    // per-writer always blocks instead of one priority-arbitrated block.
-    // always @(posedge clk) begin
-    //     if (z80_we_alpha)
-    //         alpha_lo[z80_idx10] <= vram_dout;
-    //     else if (sub1_we_alpha) begin
-    //         alpha_hi[sub1_idx10] <= sub1_dout[15:8];
-    //         alpha_lo[sub1_idx10] <= sub1_dout[7:0];
-    //     end else if (sub2_we_alpha) begin
-    //         alpha_hi[sub2_idx10] <= sub2_dout[15:8];
-    //         alpha_lo[sub2_idx10] <= sub2_dout[7:0];
-    //     end
-    // end
-    always @(posedge clk) if (z80_we_alpha) alpha_lo[z80_idx10] <= vram_dout;
-    always @(posedge clk) if (sub1_we_alpha) begin
-        alpha_hi[sub1_idx10] <= sub1_dout[15:8];
-        alpha_lo[sub1_idx10] <= sub1_dout[7:0];
-    end
-    always @(posedge clk) if (sub2_we_alpha) begin
-        alpha_hi[sub2_idx10] <= sub2_dout[15:8];
-        alpha_lo[sub2_idx10] <= sub2_dout[7:0];
-    end
-    wire [15:0] alpha_rd_sub1 = {alpha_hi[sub1_idx10], alpha_lo[sub1_idx10]};
-    wire [15:0] alpha_rd_sub2 = {alpha_hi[sub2_idx10], alpha_lo[sub2_idx10]};
-    wire  [7:0] alpha_rd_z80  = alpha_lo[z80_idx10];
-    wire [15:0] alpha_rd_scan = {alpha_hi[scan_alpha_addr], alpha_lo[scan_alpha_addr]};
+    // Port-A registered reads (_qa, muxed CPU side) + Port-B scanout reads (_qb)
+    reg [7:0] sprite_hi_qa, sprite_lo_qa, sprite_hi_qb, sprite_lo_qb;
+    reg [7:0] road_hi_qa,   road_lo_qa,   road_hi_qb,   road_lo_qb;
+    reg [7:0] alpha_hi_qa,  alpha_lo_qa,  alpha_hi_qb,  alpha_lo_qb;
+    reg [7:0] view_hi_qa,   view_lo_qa,   view_hi_qb,   view_lo_qb;
 
-    // ---- view (0x800 words) ----
-    wire z80_we_view  = vram_wr & z80_v_view;
-    wire sub1_we_view = sub1_mem_we & sub1_v_view;
-    wire sub2_we_view = sub2_mem_we & sub2_v_view;
-    // DIAG-REVERT-2026-07-12: same fix as sprite buffer above -- independent
-    // per-writer always blocks instead of one priority-arbitrated block.
-    // always @(posedge clk) begin
-    //     if (z80_we_view)
-    //         view_lo[z80_idx11] <= vram_dout;
-    //     else if (sub1_we_view) begin
-    //         view_hi[sub1_idx11] <= sub1_dout[15:8];
-    //         view_lo[sub1_idx11] <= sub1_dout[7:0];
-    //     end else if (sub2_we_view) begin
-    //         view_hi[sub2_idx11] <= sub2_dout[15:8];
-    //         view_lo[sub2_idx11] <= sub2_dout[7:0];
-    //     end
-    // end
-    always @(posedge clk) if (z80_we_view) view_lo[z80_idx11] <= vram_dout;
-    always @(posedge clk) if (sub1_we_view) begin
-        view_hi[sub1_idx11] <= sub1_dout[15:8];
-        view_lo[sub1_idx11] <= sub1_dout[7:0];
+    // ---- sprite (0x800 words, 11-bit) ----
+    always @(posedge clk) begin
+        if (we_sprite_lo) sprite_lo[pa_addr11] <= pa_wdlo;
+        sprite_lo_qa <= sprite_lo[pa_addr11];
     end
-    always @(posedge clk) if (sub2_we_view) begin
-        view_hi[sub2_idx11] <= sub2_dout[15:8];
-        view_lo[sub2_idx11] <= sub2_dout[7:0];
+    always @(posedge clk) begin
+        if (we_sprite_hi) sprite_hi[pa_addr11] <= pa_wdhi;
+        sprite_hi_qa <= sprite_hi[pa_addr11];
     end
-    wire [15:0] view_rd_sub1 = {view_hi[sub1_idx11], view_lo[sub1_idx11]};
-    wire [15:0] view_rd_sub2 = {view_hi[sub2_idx11], view_lo[sub2_idx11]};
-    wire  [7:0] view_rd_z80  = view_lo[z80_idx11];
-    wire [15:0] view_rd_scan = {view_hi[scan_view_addr], view_lo[scan_view_addr]};
+    always @(posedge clk) begin
+        sprite_lo_qb <= sprite_lo[scan_sprite_addr];
+        sprite_hi_qb <= sprite_hi[scan_sprite_addr];
+    end
+    assign scan_sprite_dout = {sprite_hi_qb, sprite_lo_qb};
+
+    // ---- road (0x400 words, 10-bit) ----
+    always @(posedge clk) begin
+        if (we_road_lo) road_lo[pa_addr10] <= pa_wdlo;
+        road_lo_qa <= road_lo[pa_addr10];
+    end
+    always @(posedge clk) begin
+        if (we_road_hi) road_hi[pa_addr10] <= pa_wdhi;
+        road_hi_qa <= road_hi[pa_addr10];
+    end
+    always @(posedge clk) begin
+        road_lo_qb <= road_lo[scan_road_addr];
+        road_hi_qb <= road_hi[scan_road_addr];
+    end
+    assign scan_road_dout = {road_hi_qb, road_lo_qb};
+
+    // ---- alpha (0x400 words, 10-bit) ----
+    always @(posedge clk) begin
+        if (we_alpha_lo) alpha_lo[pa_addr10] <= pa_wdlo;
+        alpha_lo_qa <= alpha_lo[pa_addr10];
+    end
+    always @(posedge clk) begin
+        if (we_alpha_hi) alpha_hi[pa_addr10] <= pa_wdhi;
+        alpha_hi_qa <= alpha_hi[pa_addr10];
+    end
+    always @(posedge clk) begin
+        alpha_lo_qb <= alpha_lo[scan_alpha_addr];
+        alpha_hi_qb <= alpha_hi[scan_alpha_addr];
+    end
+    assign scan_alpha_dout = {alpha_hi_qb, alpha_lo_qb};
+
+    // ---- view (0x800 words, 11-bit) ----
+    always @(posedge clk) begin
+        if (we_view_lo) view_lo[pa_addr11] <= pa_wdlo;
+        view_lo_qa <= view_lo[pa_addr11];
+    end
+    always @(posedge clk) begin
+        if (we_view_hi) view_hi[pa_addr11] <= pa_wdhi;
+        view_hi_qa <= view_hi[pa_addr11];
+    end
+    always @(posedge clk) begin
+        view_lo_qb <= view_lo[scan_view_addr];
+        view_hi_qb <= view_hi[scan_view_addr];
+    end
+    assign scan_view_dout = {view_hi_qb, view_lo_qb};
+
+    //------------------------------------------------------------------------
+    //  Per-master Port-A read HOLDs. `_qa` at capture time reflects the addr
+    //  driven onto Port-A on the PREVIOUS clk (registered read), i.e. the slot
+    //  owner just before the boundary. Capture each master's read as its slot
+    //  ends; the hold is then stable through that master's next CE:
+    //    z80  slot 0..4  -> capture div==5  (qa = z80 read from div4)
+    //    sub1 slot 5..9  -> capture div==10 (qa = sub1 read from div9); CE div5
+    //    sub2 slot 10..15-> capture div==0  (qa = sub2 read from div15); CE div10
+    //  Buffer select uses the master's decode (stable across its window), so it
+    //  agrees with the rom/vram select used when din is consumed at the CE.
+    //------------------------------------------------------------------------
+    wire [15:0] sub1_vram_qa = sub1_v_sprite ? {sprite_hi_qa, sprite_lo_qa}
+                             : sub1_v_road   ? {road_hi_qa,   road_lo_qa}
+                             : sub1_v_alpha  ? {alpha_hi_qa,  alpha_lo_qa}
+                             : sub1_v_view   ? {view_hi_qa,   view_lo_qa}
+                             :                 16'hFFFF;
+    wire [15:0] sub2_vram_qa = sub2_v_sprite ? {sprite_hi_qa, sprite_lo_qa}
+                             : sub2_v_road   ? {road_hi_qa,   road_lo_qa}
+                             : sub2_v_alpha  ? {alpha_hi_qa,  alpha_lo_qa}
+                             : sub2_v_view   ? {view_hi_qa,   view_lo_qa}
+                             :                 16'hFFFF;
+    wire  [7:0] z80_vram_qa  = z80_v_sprite  ? sprite_lo_qa
+                             : z80_v_road    ? road_lo_qa
+                             : z80_v_alpha   ? alpha_lo_qa
+                             : z80_v_view    ? view_lo_qa
+                             :                 8'hFF;
+    reg [15:0] sub1_vram_hold, sub2_vram_hold;
+    reg  [7:0] z80_vram_hold;
+    always @(posedge clk) begin
+        if (div == 4'd10) sub1_vram_hold <= sub1_vram_qa;
+        if (div == 4'd0 ) sub2_vram_hold <= sub2_vram_qa;
+        if (div == 4'd5 ) z80_vram_hold  <= z80_vram_qa;
+    end
 
     //------------------------------------------------------------------------
     //  Aux registers: per-CPU nvi_enable latch, shared hscroll/vscroll
@@ -481,43 +528,18 @@ module PolePosition_subcpu
     assign dbg2_nvi_en = nvi_en_sub2;
 
     //------------------------------------------------------------------------
-    //  Sub CPU read-data muxes
+    //  Sub CPU / Z80 read-data muxes. VRAM data comes from the per-master
+    //  Port-A read HOLD (registered one CE-period earlier == the z8002 memory
+    //  contract). The rom/vram select uses the CURRENT addr, which still points
+    //  at the same window's access being consumed this CE. ROM read is a direct
+    //  registered fetch (dedicated Port-B, no slot). Unmapped => hold defaults
+    //  (16'hFFFF / 8'hFF) preserved inside the *_vram_qa muxes above.
     //------------------------------------------------------------------------
-    assign sub1_din =
-        sub1_rom_sel  ? sub1_rom_rd    :
-        sub1_v_sprite ? sprite_rd_sub1 :
-        sub1_v_road   ? road_rd_sub1   :
-        sub1_v_alpha  ? alpha_rd_sub1  :
-        sub1_v_view   ? view_rd_sub1   :
-        16'hFFFF;
+    assign sub1_din = sub1_rom_sel ? sub1_rom_rd : sub1_vram_hold;
+    assign sub2_din = sub2_rom_sel ? sub2_rom_rd : sub2_vram_hold;
+    assign vram_din = z80_vram_hold;
 
-    assign sub2_din =
-        sub2_rom_sel  ? sub2_rom_rd    :
-        sub2_v_sprite ? sprite_rd_sub2 :
-        sub2_v_road   ? road_rd_sub2   :
-        sub2_v_alpha  ? alpha_rd_sub2  :
-        sub2_v_view   ? view_rd_sub2   :
-        16'hFFFF;
-
-    //------------------------------------------------------------------------
-    //  Z80 byte-port read mux
-    //------------------------------------------------------------------------
-    assign vram_din =
-        z80_v_sprite ? sprite_rd_z80 :
-        z80_v_road   ? road_rd_z80   :
-        z80_v_alpha  ? alpha_rd_z80  :
-        z80_v_view   ? view_rd_z80   :
-        8'hFF;
-
-    //------------------------------------------------------------------------
-    //  Scanout (port B): 4 independent word-wide read ports (all combinational,
-    //  read concurrently — buffers are behavioral byte-array pairs so parallel
-    //  reads are free). Each renderer drives its own address, gets its own data.
-    //------------------------------------------------------------------------
-    assign scan_sprite_dout = sprite_rd_scan;
-    assign scan_road_dout   = road_rd_scan;
-    assign scan_alpha_dout  = alpha_rd_scan;
-    assign scan_view_dout   = view_rd_scan;
+    // scan_*_dout (port B) are driven registered inside each buffer block above.
 
 endmodule
 
