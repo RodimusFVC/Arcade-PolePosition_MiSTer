@@ -58,6 +58,9 @@ module PolePosition_CPU
     output wire        n06_data_wr, n06_data_rd,
     output wire        n06_ctrl_wr, n06_ctrl_rd,
     input  wire  [7:0] n06_din,
+    input  wire        n06_nmi_n,     // 06xx nmi_generate() -> Z80 NMI (active low). Was tied
+                                       // 1'b1 (permanently inactive) before the 06xx block existed;
+                                       // now driven by namco_06xx.sv via poleposition.vhd.
 
     // ---- Namco WSG sound registers (0x83C0-0x83FF, 64 bytes) -------------------
     output wire  [5:0] wsg_addr,
@@ -114,7 +117,7 @@ module PolePosition_CPU
         .CLK     (clk),
         .CEN     (cen & ~pause),
         .INT_n   (n_int),
-        .NMI_n   (1'b1),
+        .NMI_n   (n06_nmi_n),
         .BUSRQ_n (1'b1),
         .M1_n    (n_m1),
         .MREQ_n  (n_mreq),

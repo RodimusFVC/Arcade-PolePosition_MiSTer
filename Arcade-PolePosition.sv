@@ -456,6 +456,32 @@ wire       pp_prom_wr   = ioctl_wr & (ioctl_index == 8'd2) & (ioctl_addr < 25'h4
 wire [9:0] pp_prom_addr = ioctl_addr[9:0];
 wire [7:0] pp_prom_data = ioctl_dout;
 
+// STEP-3b-2: Namco 5xxx MCU internal ROMs — ioctl INDEX 6, region-relative
+// (resets to 0 at this index): 51xx.bin@0x000 53xx.bin@0x400 54xx.bin@0x800,
+// each 0x400. Mirrors the chars_rom/pp_prom load pattern above. poleposition.vhd
+// decodes addr[11:10] internally per-wrapper (namco_51xx.sv claims 00, namco_53xx.sv
+// claims 01); 54xx's slice (10) is loaded here for completeness but its MCU is
+// Phase-4/unbuilt (namco_06xx.sv ties chip3's read to 0xFF regardless).
+wire        mcu_rom_wr   = ioctl_wr & (ioctl_index == 8'd6) & (ioctl_addr < 25'hC00);
+wire [11:0] mcu_rom_addr = ioctl_addr[11:0];
+wire [7:0]  mcu_rom_data = ioctl_dout;
+
+// Steering (MAME "STEER" IPT_DIAL) — no real spinner/analog input is wired at
+// this top level yet (#unverified / KNOWN ITERATION POINT). Placeholder: a
+// digital up/down counter driven by m_left1/m_right1 (both otherwise DEAD in
+// this Namco scaffold's entity, per poleposition.vhd's gutted CPU section) so
+// the 53xx's steering_changed/delta logic has SOMETHING to react to for a
+// first HW bring-up. Swap for a real spinner/paddle mapping later.
+reg [15:0] steer_div;
+reg  [7:0] steer_pos = 8'h80;
+always @(posedge clk_sys) begin
+	steer_div <= steer_div + 1'b1;
+	if (steer_div == 16'd0) begin  // clk_sys(49.152MHz)/65536 ~= 750 Hz update rate
+		if (m_left1  & ~m_right1) steer_pos <= steer_pos - 1'b1;
+		if (m_right1 & ~m_left1)  steer_pos <= steer_pos + 1'b1;
+	end
+end
+
 poleposition poleposition
 (
 	.clock_18(clk_sys),
@@ -509,6 +535,11 @@ poleposition poleposition
 	.dip_switch_b({dsw[1][7:5], ~m_bomb2, dsw[1][3:1], ~m_bomb1}),
 
 	.pause(pause_cpu),
+
+	.steer_in(steer_pos),
+	.mcu_rom_wr(mcu_rom_wr),
+	.mcu_rom_addr(mcu_rom_addr),
+	.mcu_rom_data(mcu_rom_data),
 
 	.hs_address(hs_address),
 	.hs_data_out(hs_data_out),
