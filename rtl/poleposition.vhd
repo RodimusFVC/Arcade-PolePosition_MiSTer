@@ -37,6 +37,12 @@ port(
  prom_addr      : in  std_logic_vector(9 downto 0);
  prom_data      : in  std_logic_vector(7 downto 0);
 
+ -- Namco WSG waveform PROM load (ioctl index 2, region-relative 0x1040-0x113F;
+ -- top level pre-adjusts to a plain 0-255 address -- see namco_wsg8.sv header)
+ wsg_prom_wr    : in  std_logic;
+ wsg_prom_addr  : in  std_logic_vector(7 downto 0);
+ wsg_prom_data  : in  std_logic_vector(7 downto 0);
+
  video_r        : out std_logic_vector(3 downto 0);
  video_g        : out std_logic_vector(3 downto 0);
  video_b        : out std_logic_vector(3 downto 0);
@@ -166,6 +172,14 @@ architecture struct of poleposition is
  signal mcu_div : std_logic := '0';
  signal mcu_ena : std_logic;
 
+ -- Namco WSG (8-voice, rtl/namco_wsg8.sv). u_pp_cpu's sound_en/wsg_* ports
+ -- were open/zero8 tie-offs; now real (see u_wsg instance + wiring below).
+ signal sound_en_w  : std_logic;
+ signal wsg_addr_w  : std_logic_vector(5 downto 0);
+ signal wsg_dout_w  : std_logic_vector(7 downto 0);
+ signal wsg_wr_w    : std_logic;
+ signal wsg_din_w   : std_logic_vector(7 downto 0);
+
  component namco_06xx
  port(
    clk        : in  std_logic;
@@ -220,6 +234,22 @@ architecture struct of poleposition is
    rom_wr       : in  std_logic;
    rom_addr_in  : in  std_logic_vector(11 downto 0);
    rom_data_in  : in  std_logic_vector(7 downto 0)
+ );
+ end component;
+
+ component namco_wsg8
+ port(
+   clk       : in  std_logic;
+   reset     : in  std_logic;
+   sound_en  : in  std_logic;
+   reg_addr  : in  std_logic_vector(5 downto 0);
+   reg_din   : in  std_logic_vector(7 downto 0);
+   reg_wr    : in  std_logic;
+   reg_dout  : out std_logic_vector(7 downto 0);
+   wave_wr   : in  std_logic;
+   wave_addr : in  std_logic_vector(7 downto 0);
+   wave_data : in  std_logic_vector(7 downto 0);
+   audio     : out std_logic_vector(15 downto 0)
  );
  end component;
 
@@ -310,7 +340,6 @@ zero11 <= (others => '0');
 
 blank_v      <= vblank;
 video_en     <= ena_vidgen;
-audio        <= (others => '0');
 hs_data_out  <= (others => '0');
 
 cpu_ioctl_addr <= "00000000" & dn_addr;
@@ -396,7 +425,7 @@ port map(
 	sub1_reset_n     => open,
 	sub2_reset_n     => open,
 	namco_reset      => namco_reset_w,
-	sound_en         => open,
+	sound_en         => sound_en_w,
 	gasel            => open,
 	sb0              => sb0_w,
 	chacl            => open,
@@ -413,14 +442,15 @@ port map(
 	n06_ctrl_rd      => n06_ctrl_rd_w,
 	n06_din          => n06_din_w,
 	n06_nmi_n        => n06_nmi_n_w,
-	wsg_addr         => open,
-	wsg_dout         => open,
-	wsg_wr           => open,
-	wsg_rd           => open,
-	wsg_din          => zero8,
-	engine_dout      => open,
-	engine_lsb_wr    => open,
-	engine_msb_wr    => open,
+	wsg_addr         => wsg_addr_w,
+	wsg_dout         => wsg_dout_w,
+	wsg_wr           => wsg_wr_w,
+	wsg_rd           => open,        -- unused: reg_dout is a live combinational readback,
+	                                  -- no read-strobe needed (see namco_wsg8.sv)
+	wsg_din          => wsg_din_w,
+	engine_dout      => open,        -- TODO engine sound (polepos_a.cpp) -- separate follow-up
+	engine_lsb_wr    => open,        -- TODO engine sound (polepos_a.cpp) -- separate follow-up
+	engine_msb_wr    => open,        -- TODO engine sound (polepos_a.cpp) -- separate follow-up
 	adc_wr           => open,
 	adc_rd           => open,
 	adc_din          => zero8,
@@ -440,6 +470,24 @@ port map(
 	scan_view_dout   => open,
 	hscroll          => open,
 	vscroll          => open
+);
+
+-- Namco WSG (8-voice, rtl/namco_wsg8.sv). Z80-side register bus from u_pp_cpu
+-- above; waveform PROM loaded from the top (ioctl index 2, see wsg_prom_*
+-- ports); audio replaces the removed `audio <= (others=>'0')` tie-off.
+u_wsg : namco_wsg8
+port map(
+	clk       => clock_18,
+	reset     => reset,
+	sound_en  => sound_en_w,
+	reg_addr  => wsg_addr_w,
+	reg_din   => wsg_dout_w,
+	reg_wr    => wsg_wr_w,
+	reg_dout  => wsg_din_w,
+	wave_wr   => wsg_prom_wr,
+	wave_addr => wsg_prom_addr,
+	wave_data => wsg_prom_data,
+	audio     => audio
 );
 
 -- ---- Namco 5xxx MCU clock enable (see signal declaration comment) ----------

@@ -421,7 +421,9 @@ arcade_video #(288,12) arcade_video
 wire [15:0] audio;
 assign AUDIO_L = audio;
 assign AUDIO_R = AUDIO_L;
-assign AUDIO_S = 0;
+// `audio` is the Namco WSG mixer's signed two's-complement sum (namco_wsg8.sv,
+// MAME namco.cpp mixing math) -- was 0 (arbitrary) while audio was tied off.
+assign AUDIO_S = 1;
 
 wire service, service_r, service_trigger;
 always @(posedge clk_sys) begin
@@ -455,6 +457,17 @@ end
 wire       pp_prom_wr   = ioctl_wr & (ioctl_index == 8'd2) & (ioctl_addr < 25'h400);
 wire [9:0] pp_prom_addr = ioctl_addr[9:0];
 wire [7:0] pp_prom_data = ioctl_dout;
+
+// Namco WSG waveform PROM — ioctl INDEX 2, region-relative 0x1040-0x113F (256
+// bytes, right after the 0x1040-byte "proms" block; MAME polepos "namco"
+// region, pp1-5.3b crc 8568decc; 8 waveforms x 32 4-bit samples). 0x1040 isn't
+// power-of-2-aligned, so the relative address needs an actual subtract (NOT a
+// plain bit-slice like pp_prom_addr above) — 8-bit unsigned wraparound still
+// gives the correct 0-255 result across the bit-8 boundary inside the region
+// (modular arithmetic: (A-B) mod 256 only depends on A,B mod 256).
+wire        wsg_prom_wr   = ioctl_wr & (ioctl_index == 8'd2) & (ioctl_addr >= 25'h1040) & (ioctl_addr < 25'h1140);
+wire [7:0]  wsg_prom_addr = ioctl_addr[7:0] - 8'h40;
+wire [7:0]  wsg_prom_data = ioctl_dout;
 
 // STEP-3b-2: Namco 5xxx MCU internal ROMs — ioctl INDEX 6, region-relative
 // (resets to 0 at this index): 51xx.bin@0x000 53xx.bin@0x400 54xx.bin@0x800,
@@ -497,6 +510,10 @@ poleposition poleposition
 	.prom_wr(pp_prom_wr),
 	.prom_addr(pp_prom_addr),
 	.prom_data(pp_prom_data),
+
+	.wsg_prom_wr(wsg_prom_wr),
+	.wsg_prom_addr(wsg_prom_addr),
+	.wsg_prom_data(wsg_prom_data),
 
 	.video_r(r),
 	.video_g(g),

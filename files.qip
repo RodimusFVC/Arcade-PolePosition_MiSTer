@@ -40,6 +40,12 @@ set_global_assignment -name SYSTEMVERILOG_FILE rtl/PolePosition_CPU.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/namco_06xx.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/namco_51xx.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/namco_53xx.sv
+# Namco WSG (8-voice, Pole Position register layout) — replaces the orphaned
+# Xevious sound_machine.vhd/sound_seq.vhd/sound_samples.vhd above (3-voice,
+# different register layout & waveform ROM; those 3 files are left in this qip
+# unused/uninstantiated since the STEP-3 GUT removed their instantiation).
+# See namco_wsg8.sv header for MAME ground truth (namco.cpp polepos_sound_r/w).
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/namco_wsg8.sv
 set_global_assignment -name VHDL_FILE rtl/gen_video.vhd
 set_global_assignment -name VHDL_FILE rtl/gen_ram.vhd
 set_global_assignment -name VHDL_FILE rtl/poleposition.vhd
