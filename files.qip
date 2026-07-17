@@ -2,6 +2,9 @@ set_global_assignment -name QIP_FILE rtl/cpu/T80/T80.qip
 set_global_assignment -name VHDL_FILE rtl/ram_rom/dpram.vhd
 set_global_assignment -name VHDL_FILE rtl/ram_rom/spram.vhd
 set_global_assignment -name VHDL_FILE rtl/ram_rom/dpram_dc.vhd
+# NVRAM power-on fill (MAME polepos.cpp:927 nvram_device::DEFAULT_ALL_1 = 0xFF),
+# consumed via dpram_dc's init_file generic in PolePosition_CPU.sv's nvram instance.
+set_global_assignment -name MIF_FILE rtl/ram_rom/pp_nvram_ff.mif
 set_global_assignment -name VHDL_FILE rtl/sp_palette_msb.vhd
 set_global_assignment -name VHDL_FILE rtl/sp_palette_lsb.vhd
 set_global_assignment -name VHDL_FILE rtl/sound_seq.vhd
@@ -46,6 +49,15 @@ set_global_assignment -name SYSTEMVERILOG_FILE rtl/namco_53xx.sv
 # unused/uninstantiated since the STEP-3 GUT removed their instantiation).
 # See namco_wsg8.sv header for MAME ground truth (namco.cpp polepos_sound_r/w).
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/namco_wsg8.sv
+# ADC0804 (accelerator/brake pedal A/D converter, Z80 I/O port 0x00). Faithful
+# port of MAME's adc0804.cpp device model. Instantiated by poleposition.vhd via
+# a VHDL `component` declaration (same proven Q17 VHDL<-SV path as the other
+# SystemVerilog peripherals above).
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/adc0804.sv
+# Watchdog (Z80 $A100, MAME polepos.cpp:925 set_vblank_count(...,16)). Instantiated
+# by poleposition.vhd via a VHDL `component` declaration (same proven Q17
+# VHDL<-SV path as the other SystemVerilog peripherals above).
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/pp_watchdog.sv
 set_global_assignment -name VHDL_FILE rtl/gen_video.vhd
 set_global_assignment -name VHDL_FILE rtl/gen_ram.vhd
 set_global_assignment -name VHDL_FILE rtl/poleposition.vhd

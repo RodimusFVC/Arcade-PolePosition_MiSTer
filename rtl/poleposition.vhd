@@ -23,6 +23,11 @@ port(
  clock_18       : in std_logic;
  reset          : in std_logic;
 
+ -- watchdog defeat switch (rtl/pp_watchdog.sv wdog_en). 1 = watchdog live
+ -- (MAME polepos.cpp:925 set_vblank_count(...,16)), 0 = permanently disabled.
+ -- Driven from Arcade-PolePosition.sv's OSD "Watchdog" toggle, default ON.
+ wdog_en        : in std_logic;
+
  dn_addr        : in  std_logic_vector(16 downto 0);
  dn_data        : in  std_logic_vector(7 downto 0);
  dn_wr          : in  std_logic;
@@ -97,6 +102,14 @@ port(
  mcu_rom_addr   : in  std_logic_vector(11 downto 0);
  mcu_rom_data   : in  std_logic_vector(7 downto 0);
 
+ -- ADC0804 (rtl/adc0804.sv) accelerator/brake pedal inputs (MAME "ACCEL"/"BRAKE"
+ -- analog ports, PORT_MINMAX(0,0x90)). Selected onto adc_vin by gasel_w below
+ -- (MAME polepos.h m_analog_io{"BRAKE","ACCEL"}: gasel=0->BRAKE, gasel=1->ACCEL).
+ -- Arcade-PolePosition.sv currently drives these from a digital up/down
+ -- placeholder (no real pedal/analog input wired at the top level yet).
+ accel_in       : in  std_logic_vector(7 downto 0);
+ brake_in       : in  std_logic_vector(7 downto 0);
+
  hs_address     : in  std_logic_vector(10 downto 0);
  hs_data_out    : out std_logic_vector(7 downto 0);
  hs_data_in     : in  std_logic_vector(7 downto 0);
@@ -130,6 +143,14 @@ architecture struct of poleposition is
  -- CPU ROM-load derives from the index-0 dn_ stream
  signal cpu_rom_wr    : std_logic;
  signal cpu_ioctl_addr: std_logic_vector(24 downto 0);
+
+ -- watchdog (rtl/pp_watchdog.sv): watchdog_wr_w = Z80 $A100 kick (u_pp_cpu
+ -- watchdog_wr, was `open`); wdog_reset_w = pulse OR'd into the CPU-subsystem
+ -- reset ONLY (cpu_reset_w), never the video/ioctl reset. See pp_watchdog.sv
+ -- header for the MAME citation + vblank-line source.
+ signal watchdog_wr_w : std_logic;
+ signal wdog_reset_w  : std_logic;
+ signal cpu_reset_w   : std_logic;
 
  -- zero tie-offs for unwired CPU inputs
  signal zero8  : std_logic_vector(7 downto 0);
@@ -179,6 +200,16 @@ architecture struct of poleposition is
  signal wsg_dout_w  : std_logic_vector(7 downto 0);
  signal wsg_wr_w    : std_logic;
  signal wsg_din_w   : std_logic_vector(7 downto 0);
+
+ -- ADC0804 (rtl/adc0804.sv). u_pp_cpu's gasel/adc_* ports were open/tied-off
+ -- (gasel => open, adc_wr/adc_rd => open, adc_din => zero8, adc_intr_n => '1');
+ -- now real (see u_adc instance + wiring below).
+ signal gasel_w      : std_logic;                     -- LS259 q3, 0=BRAKE 1=ACCEL
+ signal adc_wr_w     : std_logic;
+ signal adc_rd_w     : std_logic;
+ signal adc_din_w    : std_logic_vector(7 downto 0);
+ signal adc_intr_n_w : std_logic;
+ signal adc_vin_w    : std_logic_vector(7 downto 0);
 
  component namco_06xx
  port(
@@ -250,6 +281,18 @@ architecture struct of poleposition is
    wave_addr : in  std_logic_vector(7 downto 0);
    wave_data : in  std_logic_vector(7 downto 0);
    audio     : out std_logic_vector(15 downto 0)
+ );
+ end component;
+
+ component adc0804
+ port(
+   clk      : in  std_logic;
+   reset    : in  std_logic;
+   wr       : in  std_logic;
+   rd       : in  std_logic;
+   vin      : in  std_logic_vector(7 downto 0);
+   dout     : out std_logic_vector(7 downto 0);
+   intr_n   : out std_logic
  );
  end component;
 
@@ -329,10 +372,27 @@ architecture struct of poleposition is
  );
  end component;
 
+ component pp_watchdog
+ port(
+   clk        : in  std_logic;
+   reset      : in  std_logic;
+   wdog_en    : in  std_logic;
+   vpos       : in  std_logic_vector(8 downto 0);
+   kick       : in  std_logic;
+   wdog_reset : out std_logic
+ );
+ end component;
+
 begin
 
 reset_n    <= not reset;
 clock_18n  <= not clock_18;
+
+-- CPU-subsystem reset = system reset OR'd with the watchdog pulse (pp_watchdog
+-- instance below). Feeds ONLY u_pp_cpu (Z80 + both Z8002s), matching MAME's
+-- watchdog_fired()->schedule_soft_reset(). Video pipeline / ioctl-download /
+-- ROM-load reset are untouched (still driven straight from the `reset` input).
+cpu_reset_w <= reset or wdog_reset_w;
 
 zero8  <= (others => '0');
 zero10 <= (others => '0');
@@ -419,14 +479,14 @@ u_pp_cpu : PolePosition_CPU
 port map(
 	clk              => clock_18,
 	cen              => cen,
-	reset            => reset,
+	reset            => cpu_reset_w,
 	pause            => pause,
 	vpos             => vcnt,
 	sub1_reset_n     => open,
 	sub2_reset_n     => open,
 	namco_reset      => namco_reset_w,
 	sound_en         => sound_en_w,
-	gasel            => open,
+	gasel            => gasel_w,
 	sb0              => sb0_w,
 	chacl            => open,
 	sub_nvi_trig     => open,
@@ -451,11 +511,11 @@ port map(
 	engine_dout      => open,        -- TODO engine sound (polepos_a.cpp) -- separate follow-up
 	engine_lsb_wr    => open,        -- TODO engine sound (polepos_a.cpp) -- separate follow-up
 	engine_msb_wr    => open,        -- TODO engine sound (polepos_a.cpp) -- separate follow-up
-	adc_wr           => open,
-	adc_rd           => open,
-	adc_din          => zero8,
-	adc_intr_n       => '1',
-	watchdog_wr      => open,
+	adc_wr           => adc_wr_w,
+	adc_rd           => adc_rd_w,
+	adc_din          => adc_din_w,
+	adc_intr_n       => adc_intr_n_w,
+	watchdog_wr      => watchdog_wr_w,
 	ioctl_addr       => cpu_ioctl_addr,
 	ioctl_data       => dn_data,
 	rom_wr           => cpu_rom_wr,
@@ -470,6 +530,36 @@ port map(
 	scan_view_dout   => open,
 	hscroll          => open,
 	vscroll          => open
+);
+
+-- watchdog (rtl/pp_watchdog.sv). vpos = vcnt, the SAME source fed to u_pp_cpu's
+-- vpos port above (vcnt is gen_video's counter, NOT gated by CPU reset). See
+-- pp_watchdog.sv header for the MAME citation and the vblank-line source.
+u_watchdog : pp_watchdog
+port map(
+	clk        => clock_18,
+	reset      => reset,
+	wdog_en    => wdog_en,
+	vpos       => vcnt,
+	kick       => watchdog_wr_w,
+	wdog_reset => wdog_reset_w
+);
+
+-- ADC0804 (rtl/adc0804.sv) accelerator/brake pedal converter. Channel select is
+-- gasel_w (LS259 q3, MAME polepos.h m_analog_io{"BRAKE","ACCEL"}): gasel=0
+-- selects BRAKE, gasel=1 selects ACCEL. accel_in/brake_in are entity inputs
+-- (Arcade-PolePosition.sv currently drives a digital placeholder, see there).
+adc_vin_w <= accel_in when gasel_w = '1' else brake_in;
+
+u_adc : adc0804
+port map(
+	clk      => clock_18,
+	reset    => reset,
+	wr       => adc_wr_w,
+	rd       => adc_rd_w,
+	vin      => adc_vin_w,
+	dout     => adc_din_w,
+	intr_n   => adc_intr_n_w
 );
 
 -- Namco WSG (8-voice, rtl/namco_wsg8.sv). Z80-side register bus from u_pp_cpu

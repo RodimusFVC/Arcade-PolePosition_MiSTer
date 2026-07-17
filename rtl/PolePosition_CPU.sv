@@ -36,7 +36,9 @@ module PolePosition_CPU
     output wire        sub2_reset_n,  // q5  0 = Z8002 #2 held in reset (MAME .invert())
     output wire        namco_reset,   // q1  Namco 51/52/53/54xx reset  (polarity #unverified vs namco51.cpp)
     output wire        sound_en,      // q2  WSG sound_enable + engine clson
-    output wire        gasel,         // q3  ADC channel select (0=accel,1=brake)
+    output wire        gasel,         // q3  ADC channel select: 0=BRAKE, 1=ACCEL
+                                       // (verified: MAME polepos.h m_analog_io{"BRAKE","ACCEL"}
+                                       // indexed by gasel via analog_r()/gasel_w())
     output wire        sb0,           // q6  auto_start_mask = !q6 in MAME
     output wire        chacl,         // q7  (chacl_w — unmodelled)
     output wire        sub_nvi_trig,  // 1-clk pulse at line 240 -> NVI to BOTH Z8002s
@@ -223,16 +225,29 @@ module PolePosition_CPU
     );
 
     //------------------------------------------------------------------------
-    //  NVRAM (0x3000-0x37FF, battery-backed) — 2 KB
+    //  NVRAM (0x3000-0x37FF, battery-backed in MAME) — 2 KB
+    //  MAME ground truth: polepos.cpp:927 NVRAM(config, "nvram", nvram_device::DEFAULT_ALL_1)
+    //  -> a fresh/unbacked NVRAM powers up filled with 0xFF. Our core doesn't
+    //  battery-back/persist this RAM, so power-on state is all that matters.
+    //  Was plain `spram` (powers up 0x00, diverging from MAME); swapped to
+    //  dpram_dc (already used above for prog_rom, same 1-cycle read latency —
+    //  outdata_reg_a defaults UNREGISTERED, matching spram's registered-q
+    //  timing) so its init_file generic can point altsyncram at an all-FF .mif.
+    //  Port B is unused (tied off; dpram_dc's wren_b/data_b/byteena_* default
+    //  safely, same as the prog_rom instance above — only address_b/clock_b
+    //  need an explicit connection since those VHDL ports have no default).
     //------------------------------------------------------------------------
     wire [7:0] nvram_D;
-    spram #(.DATA_WIDTH(8), .ADDR_WIDTH(11)) nvram
+    dpram_dc #(.widthad_a(11), .init_file("rtl/ram_rom/pp_nvram_ff.mif")) nvram
     (
-        .clk (clk),
-        .addr(cpu_A[10:0]),
-        .data(cpu_Dout),
-        .q   (nvram_D),
-        .we  (cs_nvram & wr_s)
+        .clock_a  (clk),
+        .address_a(cpu_A[10:0]),
+        .data_a   (cpu_Dout),
+        .wren_a   (cs_nvram & wr_s),
+        .q_a      (nvram_D),
+
+        .clock_b  (clk),
+        .address_b(11'd0)
     );
 
     //------------------------------------------------------------------------

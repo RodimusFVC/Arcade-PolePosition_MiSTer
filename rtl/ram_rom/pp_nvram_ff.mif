@@ -1,0 +1,17 @@
+-- pp_nvram_ff.mif — Pole Position NVRAM power-on fill (all 0xFF)
+-- Ground truth: Useful Stuff/mame/polepos.cpp:927
+--   NVRAM(config, "nvram", nvram_device::DEFAULT_ALL_1);
+-- nvram_device::DEFAULT_ALL_1 = a fresh/unbacked NVRAM powers up filled with 0xFF.
+-- 2 KB, matching PolePosition_CPU.sv's nvram (Z80 map 0x3000-0x37FF, ADDR_WIDTH 11).
+-- Consumed via dpram_dc's init_file generic (altsyncram init_file) -- see the
+-- `nvram` instance in PolePosition_CPU.sv.
+
+WIDTH=8;
+DEPTH=2048;
+
+ADDRESS_RADIX = HEX;
+DATA_RADIX = HEX;
+
+CONTENT BEGIN
+    [0..7FF] : FF;
+END;

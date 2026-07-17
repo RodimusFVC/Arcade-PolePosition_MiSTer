@@ -198,7 +198,8 @@ assign VGA_DISABLE = 0;
 wire [1:0] ar = status[20:19];
 
 // Pole Position is a HORIZONTAL (ROT0) game. Force landscape aspect; the portrait
-// branch keyed on status[2] was inherited from the Xevious (ROT90) scaffold.
+// branch keyed on status[2] was inherited from the Xevious (ROT90) scaffold and
+// removed. status[2] was reclaimed below for the watchdog defeat switch (wdog_en).
 assign VIDEO_ARX = (!ar) ? 12'd2880 : (ar - 1'd1);
 assign VIDEO_ARY = (!ar) ? 12'd2191 : 12'd0;
 
@@ -227,6 +228,7 @@ localparam CONF_STR = {
 	"P2OA,Pause when OSD is open,On,Off;",
 	"P2OB,Dim video after 10s,On,Off;",
 	"-;",
+	"O2,Watchdog,On,Off;",
 	"O6,Service Mode,Off,On;",
 	"R0,Reset;",
 	"J1,Fire,Bomb,Start 1P,Start 2P,Coin,Pause;",
@@ -438,6 +440,13 @@ wire rom_download = ioctl_download & !ioctl_index;
 // rom_download), + ~pll_locked as the next-line cold-boot defense.
 wire reset = RESET | status[0] | buttons[1] | ioctl_download | ~pll_locked | service_trigger | key_reset;
 
+// Watchdog defeat switch (rtl/pp_watchdog.sv wdog_en, MAME polepos.cpp:925
+// set_vblank_count(...,16)). status[2]=0 (default) -> watchdog ON, matching MAME;
+// status[2]=1 -> OFF. See "O2,Watchdog,On,Off;" above and pp_watchdog.sv header
+// for why a one-place defeat switch exists (self-test hang -> ~4Hz reboot loop
+// with the watchdog live, which is useful signal but hampers on-screen diagnosis).
+wire wdog_en = ~status[2];
+
 // INCR-1a (DIAG-REVERT-2026-07-13): chars (alpha) gfx ROM. MAME polepos "chars" =
 // ioctl INDEX 1, offset 0x0000, 0x1000 bytes (pp3_28.1f, crc 2e77187e). ioctl write
 // gate per vault: index==1 & addr<0x1000; write addr region-relative (ioctl_addr
@@ -495,10 +504,22 @@ always @(posedge clk_sys) begin
 	end
 end
 
+// ADC0804 accelerator/brake pedal inputs (rtl/adc0804.sv via poleposition.vhd's
+// accel_in/brake_in ports) — DIGITAL PLACEHOLDER, no real analog/pedal input is
+// wired at this top level yet (#unverified / KNOWN ITERATION POINT, same status
+// as steer_pos above). up1/down1 double as full-on/off accel/brake so the ADC
+// path has SOMETHING to convert for first HW bring-up; m_fire1 is reserved for
+// the Gear Change input (IN0 bit1, see poleposition.vhd in0_byte), which is why
+// up/down were chosen here instead. Full scale is 0x90, NOT 0xFF, per MAME
+// PORT_MINMAX(0,0x90) on both ACCEL and BRAKE. Swap for real pedal mapping later.
+wire [7:0] pp_accel = m_up1   ? 8'h90 : 8'h00;
+wire [7:0] pp_brake = m_down1 ? 8'h90 : 8'h00;
+
 poleposition poleposition
 (
 	.clock_18(clk_sys),
 	.reset(reset),
+	.wdog_en(wdog_en),
 
 	.dn_addr(ioctl_addr[16:0]),
 	.dn_data(ioctl_dout),
@@ -557,6 +578,9 @@ poleposition poleposition
 	.mcu_rom_wr(mcu_rom_wr),
 	.mcu_rom_addr(mcu_rom_addr),
 	.mcu_rom_data(mcu_rom_data),
+
+	.accel_in(pp_accel),
+	.brake_in(pp_brake),
 
 	.hs_address(hs_address),
 	.hs_data_out(hs_data_out),
