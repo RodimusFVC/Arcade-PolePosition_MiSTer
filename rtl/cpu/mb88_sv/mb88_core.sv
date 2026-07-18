@@ -11,8 +11,29 @@
 //    Flags: st(skip-branch), zf(1=zero), cf(carry), vf(timer), sf(serial), if(irq).
 //    Reset: all 0, st=1.  st gates ONLY jmp/call/jpl/jpa (MB88 conditional model).
 //
-//  STATUS: full opcode set + internal RAM + 2-byte insns.  STUBBED (TODO, added
-//  when the ROM exercises them): interrupts, timer, serial, O-port PLA mapping.
+//  STATUS (2026-07-18): COMPLETE vs MAME mb88xx.cpp — opcode AND non-opcode.
+//  ----------------------------------------------------------------------------
+//  OPCODES: all 256 bytes, verified byte-for-byte vs mb88xx.cpp execute_run()
+//    (0x00-2f individual; 0x30-3f sbit/rbit/tbit/rti/jpa/en/dis; 0x40-7f setD/
+//    rstD/tstD/tba/xd/xyd/lxi/call/jpl/ai; 0x80-bf lyi/li/cyi/ci; 0xc0-ff jmp).
+//    No S_ILLEGAL is reachable — mb88 decodes every byte.
+//  NON-OPCODE (all implemented):
+//    * Interrupts: external-pin (rising-edge), timer-overflow, serial; enabled by
+//      pio[2:0]; vectors 0x02 / 0x04 / 0x06 (ext > timer > serial priority).
+//    * Timer: internal (pio7, ÷32 prescale) OR external TC pin (pio6) per MAME
+//      increment_timer() (2026-07-11 + 2026-07-17 fixes).
+//    * SERIAL: 4-bit RECEIVE shift @ clock()/6, armed by pio[5:4]==0x20; shifts SI
+//      in, sets sf + serial IRQ after 4 bits; runaway guard (SERIAL_DISABLE_THRESH);
+//      tsts re-arm/SBcount-reset. DIRECTED CO-SIM PROVEN: serial fill -> serial IRQ
+//      -> vector 0x06 (verilator/mb88 serial_test.bin).
+//    * O-port PLA: 8-bit cf-nibble-select outO = MAME write_pla with pla_bits==8
+//      (the device default; what the Namco 5xxx use).
+//  NOT MODELLED — NONE are gaps (MAME doesn't model them for the default part, or
+//  no target device uses them):
+//    * STANDBY (stby_n pin): MAME has no standby/STOP state for mb88.
+//    * External-clock serial (pio 0x10/0x30): MAME fatalerror's it (unsupported).
+//    * 4-bit loadable output PLA (set_pla_bits(4)+set_pla_data): opt-in per-device
+//      table; add a pla_data port only if a target programs a custom output PLA.
 // ============================================================================
 
 module mb88_core
@@ -64,9 +85,21 @@ module mb88_core
     reg [10:0] fetch_pc;
     reg [2:0]  pending_irq;    // {external, timer, serial} pending  (bit2/1/0)
     reg [5:0]  TP;             // timer prescaler (÷32)
+    // ---- SERIAL (2026-07-18; faithful to MAME mb88xx.cpp serial_timer()/pio_enable()) ----
+    // 4-bit RECEIVE shift register clocked at clock()/SERIAL_PRESCALE(=6), armed when
+    // pio[5:4]==2'b10 (MAME's (m_pio & 0x30)==0x20 = internal serial clock). Each tick
+    // shifts SI into SB bit3; after 4 bits sets sf + serial IRQ (pending_irq[0], vec 0x06).
+    // sf blocks further shifting until tsts clears it; SBcount runaway-disables at THRESH
+    // (MAME anti-hang). External-clock serial (pio 0x10/0x30) is unsupported by MAME
+    // (fatalerror) so we just don't tick. SO/transmit is not modeled in MAME's mb88 either.
+    reg [10:0] SBcount;        // serial tick counter (reaches SERIAL_DISABLE_THRESH)
+    reg [2:0]  serial_ps;      // ÷6 serial prescaler (counts ce)
+    reg        serial_disabled;// runaway guard tripped; re-armed by tsts
+    localparam [10:0] SERIAL_THRESH = 11'd1000;   // MAME SERIAL_DISABLE_THRESH
     // enabled+pending interrupt sources and the winning vector (ext>timer>serial)
     wire [2:0] active_irq = pending_irq & pio[2:0];
     wire [5:0] hw_vec = active_irq[2] ? 6'h02 : active_irq[1] ? 6'h04 : 6'h06;
+    wire serial_running = (pio[5:4]==2'b10) && !serial_disabled;   // internal serial enabled
 
     localparam [1:0] S_FETCH=0, S_FETCH2=1, S_ILLEGAL=2;
     reg [1:0] state;
@@ -113,6 +146,7 @@ module mb88_core
             r_out<=16'h000F; p_out<=0; o_out<=0; so_out<=0;
             retire<=0; illegal<=0; state<=S_FETCH; op1<=0;
             in_irq<=0; int_ack<=0; fetch_pc<=0; pending_irq<=0; TP<=0; tc_in_d<=1'b1;
+            SBcount<=11'd0; serial_ps<=3'd0; serial_disabled<=1'b0;
             // SP[] and ram[] intentionally NOT reset (MAME device_reset doesn't
             // clear data RAM/stack; ROM inits RAM; Verilator zero-inits arrays).
         end else begin
@@ -137,6 +171,21 @@ module mb88_core
               TH <= TH + 4'd1;
               if (TH == 4'hF) begin vf <= 1'b1; pending_irq[1] <= 1'b1; end
             end
+          end
+          // ---- SERIAL receive engine (MAME serial_timer). ce-paced ÷6 prescaler. Placed
+          // BEFORE the instruction block so a coincident tsts (clears sf/SBcount) overrides. ----
+          if (ce) begin
+            if (serial_running) begin
+              if (serial_ps == 3'd5) begin
+                serial_ps <= 3'd0;
+                SBcount   <= SBcount + 11'd1;
+                if ((SBcount + 11'd1) >= SERIAL_THRESH) serial_disabled <= 1'b1;   // runaway guard
+                if (!sf) begin
+                  SB <= {si_in, SB[3:1]};                       // MAME: SB = (SB>>1) | (si?8:0)
+                  if ((SBcount + 11'd1) >= 11'd4) begin sf <= 1'b1; pending_irq[0] <= 1'b1; end
+                end
+              end else serial_ps <= serial_ps + 3'd1;
+            end else serial_ps <= 3'd0;   // hold phase reset while disarmed (timer restarts on arm)
           end
           if (ce) begin
             retire <= 1'b0; int_ack <= 1'b0;
@@ -195,7 +244,12 @@ module mb88_core
                 8'h24: st <= (r_in[{Y[3:2],2'b0} +: 4] & (4'd1<<Y[1:0])) ? 1'b0 : 1'b1; // tstr
                 8'h25: st <= ~iflag;                            // tsti
                 8'h26: begin st<=~vf; if (!timer_ovf_now) vf<=0; end // tstv — MCU-TIMERVF-FIX-2026-07-11: skip clear on coincident overflow; was "vf<=0;" unconditional
-                8'h27: begin st<=~sf; sf<=0; end                // tsts (serial stubbed)
+                8'h27: begin st<=~sf;                          // tsts: st=~sf; if(sf){re-arm+SBcount=0}; sf=0
+                             if (sf) begin
+                               if (SBcount >= SERIAL_THRESH) serial_disabled <= 1'b0;  // re-enable runaway-disabled serial
+                               SBcount <= 11'd0;
+                             end
+                             sf <= 1'b0; end
                 8'h28: st <= ~cf;                               // tstc
                 8'h29: st <= ~zf;                               // tstz
                 8'h2a: begin wr_en=1;wr_addr=ea;wr_val=SB; zf<=(SB==0); st<=1; end // sts
