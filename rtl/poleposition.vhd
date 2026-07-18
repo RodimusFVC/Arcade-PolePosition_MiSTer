@@ -249,7 +249,8 @@ architecture struct of poleposition is
    p_port_out   : out std_logic_vector(3 downto 0);
    rom_wr       : in  std_logic;
    rom_addr_in  : in  std_logic_vector(11 downto 0);
-   rom_data_in  : in  std_logic_vector(7 downto 0)
+   rom_data_in  : in  std_logic_vector(7 downto 0);
+   vblank       : in  std_logic
  );
  end component;
 
@@ -643,7 +644,11 @@ port map(
 	p_port_out  => open,
 	rom_wr      => mcu_rom_wr,
 	rom_addr_in => mcu_rom_addr,
-	rom_data_in => mcu_rom_data
+	rom_data_in => mcu_rom_data,
+	-- TC-TIMER-FIX-2026-07-17: vblank -> 51xx mb88 external-counter timer (was stubbed).
+	-- `vblank` is gen_video's blank_v (1 during vertical blank); the 51xx inverts it to
+	-- the TC pin level internally. This is what advances the 51xx per-frame self-test logic.
+	vblank      => vblank
 );
 
 u_n53xx : namco_53xx

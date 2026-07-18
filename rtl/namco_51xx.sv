@@ -56,7 +56,13 @@ module namco_51xx
     //      the 0x000-0x3FF slice) --------------------------------------------
     input  wire        rom_wr,
     input  wire [11:0] rom_addr_in,
-    input  wire  [7:0] rom_data_in
+    input  wire  [7:0] rom_data_in,
+
+    // ---- vblank -> mb88 TC (external-counter) pin --------------------------
+    //   MAME: m_screen->screen_vblank().set("51xx", vblank); vblank(state) drives
+    //   MB88XX_TC_LINE, "active on falling edges". The mb88 external-counter timer
+    //   ticks once per frame off this. `vblank` here = 1 during vertical blank.
+    input  wire        vblank
 );
 
     // ---- shared mailbox (see header) ---------------------------------------
@@ -107,8 +113,11 @@ module namco_51xx
         .p_port_out (p_port_out),
 
         .stby_n     (1'b1),
-        .tc_n       (1'b1),   // MAME drives this from vblank (namco_51xx_device::vblank); mb88_core's
-                               // tc_in is currently a stub (no functional path) so this is inert either way
+        // TC-TIMER-FIX-2026-07-17: was tied 1'b1 (stub). Now the mb88 TC pin = the TC
+        // LEVEL that MAME sets from vblank: `set_input_line(TC, state?CLEAR:ASSERT)` =>
+        // TC = ~vblank (high during active display, low during blank). mb88_core ticks the
+        // external-counter timer on TC's FALLING edge (= vblank START), gated by pio bit6.
+        .tc_n       (~vblank),
         .irq_n      (~chip_sel),
         .sc_in_n    (1'b1),
         .si_n       (1'b1),

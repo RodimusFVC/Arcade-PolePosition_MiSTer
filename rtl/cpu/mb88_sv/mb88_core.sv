@@ -60,6 +60,7 @@ module mb88_core
     reg [3:0]  ram [0:127];
     reg        retire, illegal;
     reg        in_irq, int_ack;
+    reg        tc_in_d;       // TC pin level registered, for external-counter falling-edge detect
     reg [10:0] fetch_pc;
     reg [2:0]  pending_irq;    // {external, timer, serial} pending  (bit2/1/0)
     reg [5:0]  TP;             // timer prescaler (÷32)
@@ -111,16 +112,26 @@ module mb88_core
             // (R3.3 high => spurious NMI). Z80 reads R0.bit1 at boot to arm E039 — must be 1.
             r_out<=16'h000F; p_out<=0; o_out<=0; so_out<=0;
             retire<=0; illegal<=0; state<=S_FETCH; op1<=0;
-            in_irq<=0; int_ack<=0; fetch_pc<=0; pending_irq<=0; TP<=0;
+            in_irq<=0; int_ack<=0; fetch_pc<=0; pending_irq<=0; TP<=0; tc_in_d<=1'b1;
             // SP[] and ram[] intentionally NOT reset (MAME device_reset doesn't
             // clear data RAM/stack; ROM inits RAM; Verilator zero-inits arrays).
         end else begin
           // external IRQ pin (active-low): logical rising edge sets pending if enabled
           iflag <= ~irq_n;
           if (~irq_n && !iflag && pio[2]) pending_irq[2] <= 1'b1;
+          // TC-TIMER-FIX-2026-07-17: external-counter timer path. MAME mb88xx.cpp:
+          //   `if (m_ctr && !state && (m_pio & 0x40)) increment_timer();  m_ctr = state;`
+          // i.e. on a FALLING edge of the TC pin, if external-counter mode (pio bit6/0x40)
+          // is enabled, tick the SAME timer. This drives the 51xx's per-frame timer, which
+          // MAME clocks from screen vblank (namco51.cpp vblank() -> MB88XX_TC_LINE). `tc_in`
+          // is the TC pin LEVEL; register it here (every clk, ungated) to catch the edge.
+          tc_in_d <= tc_in;
           // timer: ena_timer is ALREADY ÷32-prescaled externally (Kangaroo mcu_tp),
-          // so increment TL directly -> TH cascade -> overflow -> timer IRQ pending.
-          if (ena_timer && pio[7]) begin  // MCU-TIMER-FIX-2026-07-11: gate on pio7 (MAME m_pio&0x80 / old VHDL r_pio(7)); was "if (ena_timer)" with no pio7 gate
+          // so increment TL directly -> TH cascade -> overflow -> timer IRQ pending. Two
+          // mutually-exclusive sources feed the ONE counter (a chip uses internal OR external
+          // mode, never both): internal clock (ena_timer & pio7 = MAME 0x80), OR external TC
+          // falling edge (pio6 = MAME 0x40).
+          if ((ena_timer && pio[7]) || ((tc_in_d & ~tc_in) && pio[6])) begin  // MCU-TIMER-FIX-2026-07-11: pio7 gate (MAME 0x80); TC-TIMER-FIX-2026-07-17: + external TC path (pio6/MAME 0x40)
             TL <= TL + 4'd1;
             if (TL == 4'hF) begin
               TH <= TH + 4'd1;
@@ -256,6 +267,6 @@ module mb88_core
     end
 
     // verilator lint_off UNUSED
-    wire _unused = &{1'b0, si_in, irq_n, tc_in, sf, vf, pio, TH, TL, op[7]};
+    wire _unused = &{1'b0, si_in, irq_n, sf, vf, pio, TH, TL, op[7]};
     // verilator lint_on UNUSED
 endmodule

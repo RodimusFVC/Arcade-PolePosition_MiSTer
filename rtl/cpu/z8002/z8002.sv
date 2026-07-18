@@ -4,6 +4,49 @@
 //
 //  References: MAME z8000ops.hxx / z8000tbl.hxx / z8000cpu.h (behavioral oracle).
 //
+//  ============================================================================
+//  ★ NOT YET IMPLEMENTED — what's left to make this a FULL Z8000 core ★
+//  ----------------------------------------------------------------------------
+//  This core is COMPLETE for everything Pole Position exercises: both sub ROMs
+//  co-sim-run to completion (pp_sub1 ~15M / pp_sub2 ~12M retires @30M cyc, ZERO
+//  dbg_illegal), and the NVI/ISR/IRET selftest passes. Every item below is
+//  DELIBERATELY unbuilt and is UNREACHABLE by PP — its ROMs never execute these
+//  and its wiring ties the relevant pins inactive. Scope decision 2026-07-18:
+//  "close reachable gaps only". Reusing this core for a DIFFERENT Z8000 game (or
+//  wanting a truly complete Z8002) means building the pieces below.
+//
+//  --- OPCODES (all route to S_ILLEGAL; see the catch-all near the 0xC handler) ---
+//    0x30-0x37  load-relative / base+displacement (LDR/LDRB/LDRL, LDB base+disp)
+//    0x38-0x3F  I/O + block I/O (IN/OUT/INB/OUTB/SIN/SOUT/SINB/SOUTB,
+//               INIR/OTIR/INDR/OTDR/...) - no I/O device on the PP sub-CPUs
+//    0x70-0x77  base+index loads, LDA/LDAR (load-address)
+//    0x79       LDPS (load program status)                     [privileged]
+//    0x7A       HALT                                           [privileged]
+//    0x7B       MSET/MRES/MBIT/MREQ (multi-micro)  -- NOTE 0x7B00 IRET IS done
+//    0x7D       LDCTL: FCW(2)+PSAPOFF(5) done; REFRESH(3)/NSPOFF(7)/seg = no-op
+//    0x7E/0x7F  extended / SC (system-call trap)
+//    0xB8/BA/BB block transfer / compare / translate strings (LDIR/CPIR/TRIB/...)
+//    0x0E/0F/4E/8E/8F  EPU extended instructions  -- no EPU present
+//    (Also: one 0x4D0x direct-address sub-op default traps -- implemented 0x4D
+//     sub-ops are STI/CLR/TST; the rest are unused by PP.)
+//
+//  --- NON-OPCODE (chip machinery -- a CPU is more than its decode) ---
+//    VI  (vectored interrupt)  vi_n pin exists but sits in the _unused sink: NO
+//        accept path, NO vector-byte acknowledge cycle. PP ties vi_n inactive
+//        (matches MAME: subs take NVI ONLY, asserted at vblank scanline 240).
+//    NMI                       nmi_n pin in _unused sink; no accept path. PP ties
+//        nmi_n inactive. (NVI itself is FULLY implemented + selftest-proven.)
+//    Traps                     SC / privileged / extended-instruction / segment:
+//        NO trap-vectoring infrastructure (tied to the trapped opcodes above).
+//    Normal/System SP (FCW.S_N) single hardware SP; S_N never toggles here, so no
+//        NSP<->SSP swap on mode change or interrupt entry.
+//    wait_n                    NOT honored (in _unused sink); memory assumed
+//        zero-wait (BRAM). A slow/shared bus would need real wait handling.
+//    iorq                      output pin exists but is never driven (no I/O ops).
+//    REFRESH                   LDCTL REFRESH accepted as a no-op (no DRAM here).
+//    Segmentation (Z8001)      absent by design -- this is the Z8002 (non-seg) part.
+//  ============================================================================
+//
 //  Baked-in (verified vs MAME): BIG-ENDIAN (word@A={mem[A]hi,mem[A+1]lo}); PC even;
 //  SP=R15; 16x16 regfile, byte reg n -> R[n&7] HIGH if n<8 else LOW; FCW C=b7 Z=b6
 //  S=b5 P/V=b4 DA=b3 H=b2 ; reset reads FCW@mem[2], PC@mem[4].
@@ -89,6 +132,103 @@
 //  this batch (out of the task brief's explicit scope, which named only the 0x22/0x24/
 //  0x2C register-indirect forms), flagged as the strongest Batch 5 candidate since it
 //  would reuse this batch's exact *_FETCH+index-add pattern at near-zero marginal cost.
+//
+//  BATCH 5 built exactly that: the direct-address(+index) RESB/RES/SETB/SET/BITB/BIT/EXB/EX
+//  family (0x62-0x67, 0x6C-0x6D), all eight mnemonics, both the direct (NIB2=din[7:4]=0) and
+//  register-indexed (NIB2!=0, addr(Rx), reusing Batch 4's ea<=din+R[idxr] shape) forms.
+//  GET_BIT/GET_DST(OP0,NIB3) (z8000cpu.h) put the bit-index/exchange-value field at NIB3
+//  (din[3:0]) for ALL EIGHT opcodes regardless of NIB2, confirmed per-handler in
+//  z8000ops.hxx. RES/SET (0x63/0x65, word) share one state pair via bitop_set, mirroring the
+//  existing register-indirect S_BITW_RD/WR; RESB/SETB (0x62/0x64, byte) share one word-
+//  aligned RMW pair (wordacc rule) mirroring S_RESETB_RD/WR, lane=ea[0] (the fetched
+//  address' LSB, NOT a register bit -- same convention as S_LDBDA_RD/S_RESETB_WR). BIT/BITB
+//  (0x67/0x66) are read-only (flags -Z----, own FETCH/RD only, no WR). EX/EXB (0x6D/0x6C)
+//  are exchanges (own FETCH/RD/WR, `dst`=NIB3=value register(-code), reusing the EXISTING
+//  `exb_val` wire unchanged since it's already generic on `dst`). Also added EX rd,rs
+//  reg-reg (0xAD, full range, register-only) alongside, mirroring the already-implemented
+//  EXB reg-reg (0xAC).
+//  ROM-USAGE CORRECTION (measured properly this batch, see report): the 0x38A0-0x3E08 span
+//  in ALL FOUR pp*_sub*.asm files is a DATA TABLE (raw incrementing byte values -- e.g.
+//  0x6C,0x6D,0x6E,0x6F = ASCII "l","m","n","o" -- confirmed by manual inspection: the
+//  "instructions" there don't form coherent flow, unlike the real code immediately before
+//  it) misdecoded as plausible opcodes; EVERY apparent RESB/BITB/EXB hit and several
+//  RES/SET/BIT hits previously counted were inside this table and are FALSE POSITIVES (this
+//  is the file header's own TRAP-1 warning, caught in the act). Excluding that span, REAL
+//  confirmed usage is BIT 52 (47 direct+5 indexed), SET 43 (all direct), RES 22 (21
+//  direct+1 indexed), EX 6 (all indexed -- direct form unused), SETB 1 (direct), EX(0xAD
+//  reg-reg) 3; RESB/BITB/EXB have ZERO confirmed real hits. Implemented all eight anyway
+//  (RESB/BITB/EXB ride for free on their required siblings' state machinery) to close the
+//  whole range rather than leave a partial family with stray S_ILLEGAL traps.
+//
+//  BATCH 5 PART 2 (task item 2, budget permitting) added the register-indirect @Rd "simple"
+//  family (0x0C byte / 0x0D word, dst=NIB2, sub-op selector=NIB3): TESTB/TSETB/CLRB @rd
+//  (0x0C, NIB3=4/6/8) and COM/CP-imm16/NEG/TEST/TSET/CLR @rd (0x0D, NIB3=0/1/2/4/6/8) --
+//  explicitly named item-2 candidates ("register-indirect NEG/COM", "TSET/TSETB register-
+//  indirect"). All gated NIB2(dst)!=0 (z8000tbl.hxx's table range starts at NIB2=1 --
+//  dst=R0 is undefined for this whole family); flags/RMW formulas copied unchanged from
+//  their already-verified register-direct siblings (TESTB/COM/NEG) or the existing word CP
+//  aluop. `state` widened from 7 to 8 bits (max value crossed 127) -- the one non-purely-
+//  additive line touched this batch, flagged per the task brief. SKIPPED: COMB @rd (0x0C,
+//  NIB3=0) -- z8000ops.hxx's handler reads GET_DST(OP0,NIB3) instead of NIB2 like every
+//  sibling sub-op, which (since NIB3 is the fixed sub-op-selector, always 0 here) means MAME
+//  itself always resolves dst=R0 for this one opcode -- looks like a genuine MAME source
+//  bug, not real hardware behavior; only 1 real ROM occurrence anyway, not worth the
+//  ambiguity (see report). NEGB/CPB-imm8/LDB-imm8 @rd: zero confirmed real occurrences,
+//  skipped. Also flagged (not fixed, out of scope): the pre-existing baseline LD @rd,#imm16
+//  arm (0x0D/NIB3=5) lacks the NIB2!=0 guard that every sibling in this family needs.
+//
+//  BATCH 6 (this session; the incoming task brief called it "Batch 5" but that name was
+//  already used above by real prior history in this file, so the new work is numbered
+//  6 to keep the log unambiguous -- see report). Full mechanical set-diff against
+//  z8000tbl.hxx's 519 real rows found the decode MUCH further along than the task brief
+//  assumed (its named "still-deferred" items -- RESB/SETB/EXB register-indirect, LDB/
+//  CPL/INC/DEC indexed EA -- were already done in Batches 4-5 above) but also turned up a
+//  large amount of genuinely new territory the brief never named. Implemented this batch,
+//  all ADDITIVE, all reusing existing datapaths: (1) 0x40-0x4B ALU addr[,(rs)] direct/
+//  indexed (ADDB/ADD/SUBB/SUB/ORB/OR/ANDB/AND/XORB/XOR/CPB/CP, dest always a register --
+//  the task brief's explicit item 1); (2) 0x1000-0x100F CPL rrd,imm32 (explicit item 2);
+//  (3) 0x28-0x2B register-indirect INCB/INC/DECB/DEC @rd; (4) 0x68/0x6A byte INC/DEC
+//  addr[,(rs)],#n (byte siblings of the already-done word 0x69/0x6B); (5) missing indexed
+//  arms for LD rd,addr(rs) / LD addr(rs),rs (0x61/0x6F, direct forms were already done);
+//  (6) a large sweep of register-only, zero-memory-access closures: 0x8C remaining sub-ops
+//  (COMB/NEGB/TSETB/LDCTLB-read/LDCTLB-write), 0x8D remaining sub-ops (NOP/TEST/TSET/
+//  SETFLG/RESFLG/COMFLG), 0x9C TESTL, 0xA2-0xA7 register-direct RESB/RES/SETB/SET/BITB/
+//  BIT rd,imm4, 0xAE/0xAF TCCB/TCC, 0xBC/0xBD/0xBE RLDB/LDK/RRDB, 0xB1d7 EXTSL, and
+//  0xC0-0xCF LD rd,imm8 short form (single-word, dst=NIB1, imm8=the SAME word's low byte).
+//  RLDB/RRDB were traced term-by-term through the actual MAME C body (not the mnemonic's
+//  naive "rotate" implication) -- RLDB's second register (b) algebraically comes out
+//  UNCHANGED (tmp captured before any write, then re-OR'd back into itself); RRDB's does
+//  not. `state` unchanged at 8 bits (new max 158, still under 255).
+//
+//  EXPLICITLY DEFERRED, NOT IMPLEMENTED, WITH JUSTIFICATION (see report for the full
+//  per-family breakdown): 0x30-0x35/0x37 LDRB/LDR/LDRL/LDA/LDAR relative(dsp16 PC-
+//  relative)+indexed(idx16) -- CONFIRMED real usage in both sub ROMs (ldr/lda/ldar/ldrb
+//  disassemble at matching addresses in both subs, i.e. genuine shared code, not the
+//  file's known data-table false-positive span) but needs a NEW PC-relative EA style;
+//  strongest next-batch candidate. 0x4C/0x4D/0x4E static-op/LDB-store direct+indexed
+//  address family (COM/CP-imm/NEG/TEST/LD-imm/TSET/CLR byte+word @addr, mirrors the
+//  already-built 0x0C/0x0D register-indirect siblings almost exactly) -- large (~30+
+//  states), modest confirmed usage, deferred for batch-size discipline. 0x51-0x5C(+5D/5F
+//  indexed) PUSHL/POPL/SUBL/ADDL/MULTL/DIVL/MULT/DIV-vs-address forms, direct-address LDM,
+//  TESTL-addr -- large brand-new family, usage not yet measured. 0x70-0x77 Rx register+
+//  register-indexed family (EA=Rbase+Ridx, a third new addressing-mode category) -- only
+//  1 confirmed hit (LDA/0x74, identical in both subs); the other 6 siblings show zero,
+//  and a partial family would leave the exact "stray S_ILLEGAL trap" the project's own
+//  precedent warns against, so deferred whole. 0xB0 DAB rbd -- CONFIRMED real usage (15
+//  hits in sub1, clustered as BCD-adjacent register pairs, zero false-positive risk) but
+//  needs the literal 2048-entry Z8000_dab[] ROM table (z8000dab.h) transcribed faithfully
+//  (the generator's own makedab.cpp has a confirmed operator-precedence bug baked into the
+//  checked-in table -- must transcribe the ACTUAL table, not re-derive the "intended"
+//  algorithm); flagged HIGH PRIORITY next batch given confirmed usage. 0xB8 TRxB/TRTxB
+//  translate-block and 0xBA/0xBB CPxx/CPxxR/LDxx/LDxxR compare/move-block -- complex
+//  multi-condition self-repeating block primitives, zero confirmed usage, out of scope.
+//  Genuinely PRIVILEGED/EPU/reserved, skipped like the existing refresh/nspseg/nspoff
+//  precedent (not silently trapped -- just never reachable by PP's normal-mode program):
+//  0x0E/0x0F ext0e/ext0f (EPU, also the file's own documented false-positive trigger),
+//  0x36 BPT+rsvd, 0x38/0x78/0x7E/0x8E/0x8F/0x9D/0x9F/0xB9/0xBF rsvd/EPU, 0x39/0x79 LDPS,
+//  0x3A/0x3B I/O block, 0x3C-0x3F IN/OUT, 0x7A HALT, 0x7B08/09/0A/dddd_1101 MSET/MRES/
+//  MBIT/MREQ (multiprocessor cascade lines), 0x7F SC (system-call trap -- needs new
+//  vectoring infra this core doesn't have, zero expected arcade-sub-CPU usage).
 // ============================================================================
 
 module z8002
@@ -241,7 +381,70 @@ module z8002
                      // existing word EX (S_EX_RD/WR) merged with the LDB-store byte-
                      // merge pattern (S_LDBST_RD/WR).
                      S_EXB_RD=102, S_EXB_WR=103;
-    reg [6:0] state;
+    // ---- BATCH 5 additions ----
+    localparam [6:0]
+                     // direct-address(+index) RESB/SETB (0x62/0x64, byte RMW, share bmask/
+                     // bitop_set like the existing word RES/SET); lane=ea[0].
+                     S_DAB_RESB_FETCH=104, S_DAB_RESBX_FETCH=105,
+                     S_DAB_RESB_RD=106, S_DAB_RESB_WR=107,
+                     // direct-address(+index) RES/SET (0x63/0x65, word RMW, share bmask/
+                     // bitop_set).
+                     S_DAB_RESW_FETCH=108, S_DAB_RESWX_FETCH=109,
+                     S_DAB_RESW_RD=110, S_DAB_RESW_WR=111,
+                     // direct-address(+index) BITB (0x66, read-only byte, flags -Z----).
+                     S_DAB_BITB_FETCH=112, S_DAB_BITBX_FETCH=113, S_DAB_BITB_RD=114,
+                     // direct-address(+index) BIT (0x67, read-only word, flags -Z----).
+                     S_DAB_BITW_FETCH=115, S_DAB_BITWX_FETCH=116, S_DAB_BITW_RD=117,
+                     // direct-address(+index) EXB (0x6C, byte RMW exchange; `dst`=NIB3=
+                     // value byte-reg-code, reuses the existing `exb_val` wire).
+                     S_DAB_EXB_FETCH=118, S_DAB_EXBX_FETCH=119,
+                     S_DAB_EXB_RD=120, S_DAB_EXB_WR=121,
+                     // direct-address(+index) EX (0x6D, word exchange).
+                     S_DAB_EXW_FETCH=122, S_DAB_EXWX_FETCH=123,
+                     S_DAB_EXW_RD=124, S_DAB_EXW_WR=125;
+    // ---- BATCH 5 PART 2 additions (register-indirect @Rd simple family, 0x0C/0x0D) ----
+    // State count exceeded the 7-bit budget (max 127) -- `state` widened to 8 bits below.
+    // This is the one non-purely-additive line touched this batch (documented, see report).
+    localparam [7:0]
+                     S_TESTBI_RD=126,
+                     S_TSETBI_RD=127, S_TSETBI_WR=128,
+                     S_CLRBI_RD=129,  S_CLRBI_WR=130,
+                     S_COMI_RD=131,   S_COMI_WR=132,
+                     S_CPRI_IMM=133,  S_CPRI_RD=134,
+                     S_NEGI_RD=135,   S_NEGI_WR=136,
+                     S_TESTI_RD=137,
+                     S_TSETI_RD=138,  S_TSETI_WR=139,
+                     S_CLRI_WR=140;
+    // ---- BATCH 6 additions (this session): 0x40-0x4B ALU addr[,(rs)] direct/indexed
+    // forms (task item 1), 0x1000-0x100F CPL rrd,imm32 (task item 2), plus a set-diff-
+    // driven sweep of cheap real gaps the mechanical audit turned up: 0x28-0x2B
+    // register-indirect INCB/INC/DECB/DEC @rd; 0x68/0x6A byte INC/DEC addr direct/
+    // indexed (byte siblings of the already-implemented word 0x69/0x6B); missing
+    // indexed arms for LD rd,addr(rs)/LD addr(rs),rs (0x61/0x6F NIB2!=0); and a large
+    // batch of register-ONLY closures with zero memory access (0x8C/0x8D remaining
+    // sub-ops, 0x9C TESTL, 0xA2-0xA7 register-direct bit ops, 0xAE/0xAF TCCB/TCC,
+    // 0xBC/0xBD/0xBE RLDB/LDK/RRDB, 0xB1d7 EXTSL, 0xC0-0xCF LD rd,imm8 short form --
+    // these need NO new states at all, added directly in S_FETCH0). See report for the
+    // full set-diff and the (large) explicitly-deferred remainder.
+    localparam [7:0]
+                     // 0x40-0x4B ALU addr[,(rs)]: FETCH computes ea (direct/indexed,
+                     // Batch-4 shape), RD reads @ea and stages `operand`, then joins the
+                     // EXISTING S_ALU/S_ALUB tail unchanged (dst/aluop latched at decode).
+                     S_ALUA_FETCH=141,  S_ALUAX_FETCH=142,  S_ALUA_RD=143,
+                     S_ALUAB_FETCH=144, S_ALUABX_FETCH=145, S_ALUAB_RD=146,
+                     // 0x1000-0x100F CPL rrd,imm32: mirrors S_LDL_IMM_HI/LO's "two words
+                     // via pc, no ea" shape feeding the existing CPL dif33 compare formula.
+                     S_CPLI_HI=147, S_CPLI_LO=148,
+                     // 0x68/0x6A INCB/DECB addr[,(rs)],#n: byte sibling of S_INCDA_FETCH/
+                     // RD/WR, ea[0]-lane merge (same shape as S_LDBSTA's byte-store merge).
+                     S_INCDAB_FETCH=149, S_INCDABX_FETCH=150, S_INCDAB_RD=151, S_INCDAB_WR=152,
+                     // 0x61/0x6F missing indexed arms: compute ea<=din+R[idxr] then join
+                     // the EXISTING, unmodified S_DA_RD/S_DA_WR tail (Batch-4 X_FETCH shape).
+                     S_LDAX_FETCH=153, S_LDSAX_FETCH=154,
+                     // 0x28-0x2B INCB/INC/DECB/DEC @rd: EA=R[dst] directly (no address
+                     // word to fetch at all) -- mirrors S_INCDA_RD/WR one level more direct.
+                     S_INCBI_RD=155, S_INCBI_WR=156, S_INCWI_RD=157, S_INCWI_WR=158;
+    reg [7:0] state;
 
     // BATCH 2: RB(src) value staged for the LDB @Rd,rbs store merge (S_LDBST_WR) --
     // src here holds the byte-reg-code of the VALUE register (see 0x2E decode arm).
@@ -258,6 +461,14 @@ module z8002
     // BATCH 4: EXB rbd,@rs old-value staging (S_EXB_WR dout) -- `dst` here holds the
     // byte-reg-code of the VALUE register (see 0x2C decode arm), mirroring ldbst_val.
     wire [7:0] exb_val = dst[3] ? R[dst[2:0]][7:0] : R[dst[2:0]][15:8];
+
+    // BATCH 5: RESB/SETB addr[,(rd)],#imm4 byte-merge (S_DAB_RESB_WR) -- same shape as
+    // Batch 4's `resetb_new` but the RMW pointer is the fetched/indexed `ea`, not R[dst]
+    // (dst holds the EXCHANGE value register for this batch's EX/EXB, not a bit-op pointer).
+    // Lane = ea[0] (the address LSB), matching S_LDBDA_RD/resetb_new's established convention.
+    wire [7:0] daresb_new = bitop_set
+        ? ((ea[0] ? operand[7:0] : operand[15:8]) | bmask[7:0])
+        : ((ea[0] ? operand[7:0] : operand[15:8]) & ~bmask[7:0]);
 
     // NVI push / IRET pop addresses: SP=R[15]; pushes pre-decrement (addr=R15-2,
     // and R15 itself is updated -=2 on the same edge), pops read at current R15
@@ -336,6 +547,45 @@ module z8002
                   (state==S_RESETB_WR ) ? (R[dst] & 16'hFFFE) :
                   (state==S_EXB_RD    ) ? (R[src] & 16'hFFFE) :
                   (state==S_EXB_WR    ) ? (R[src] & 16'hFFFE) :
+                  // ---- BATCH 5: direct-address(+index) RESB/RES/BITB/BIT/EXB/EX family
+                  //      (the *_FETCH/*X_FETCH states read the addr word via `pc`, same
+                  //      default convention as every other *_FETCH state -- no entry needed) --
+                  (state==S_DAB_RESB_RD) ? (ea & 16'hFFFE) :
+                  (state==S_DAB_RESB_WR) ? (ea & 16'hFFFE) :
+                  (state==S_DAB_RESW_RD) ?  ea :
+                  (state==S_DAB_RESW_WR) ?  ea :
+                  (state==S_DAB_BITB_RD) ? (ea & 16'hFFFE) :
+                  (state==S_DAB_BITW_RD) ?  ea :
+                  (state==S_DAB_EXB_RD ) ? (ea & 16'hFFFE) :
+                  (state==S_DAB_EXB_WR ) ? (ea & 16'hFFFE) :
+                  (state==S_DAB_EXW_RD ) ?  ea :
+                  (state==S_DAB_EXW_WR ) ?  ea :
+                  // ---- BATCH 5 PART 2: register-indirect @Rd simple family (0x0C/0x0D) ----
+                  (state==S_TESTBI_RD) ? (R[dst] & 16'hFFFE) :
+                  (state==S_TSETBI_RD) ? (R[dst] & 16'hFFFE) :
+                  (state==S_TSETBI_WR) ? (R[dst] & 16'hFFFE) :
+                  (state==S_CLRBI_RD ) ? (R[dst] & 16'hFFFE) :
+                  (state==S_CLRBI_WR ) ? (R[dst] & 16'hFFFE) :
+                  (state==S_COMI_RD  ) ?  R[dst] :
+                  (state==S_COMI_WR  ) ?  R[dst] :
+                  (state==S_CPRI_RD  ) ?  R[dst] :
+                  (state==S_NEGI_RD  ) ?  R[dst] :
+                  (state==S_NEGI_WR  ) ?  R[dst] :
+                  (state==S_TESTI_RD ) ?  R[dst] :
+                  (state==S_TSETI_RD ) ?  R[dst] :
+                  (state==S_TSETI_WR ) ?  R[dst] :
+                  (state==S_CLRI_WR  ) ?  R[dst] :
+                  // ---- BATCH 6 ---- (the new *_FETCH/*X_FETCH states all read the addr/
+                  // imm word via `pc`, same default convention as every prior *_FETCH
+                  // state -- no entry needed for those here)
+                  (state==S_ALUA_RD    ) ?  ea :
+                  (state==S_ALUAB_RD   ) ? (ea & 16'hFFFE) :
+                  (state==S_INCDAB_RD  ) ? (ea & 16'hFFFE) :
+                  (state==S_INCDAB_WR  ) ? (ea & 16'hFFFE) :
+                  (state==S_INCBI_RD   ) ? (R[dst] & 16'hFFFE) :
+                  (state==S_INCBI_WR   ) ? (R[dst] & 16'hFFFE) :
+                  (state==S_INCWI_RD   ) ? (R[dst] & 16'hFFFE) :
+                  (state==S_INCWI_WR   ) ? (R[dst] & 16'hFFFE) :
                                         pc;
     assign mreq    = (state!=S_ILLEGAL);
     assign iorq    = 1'b0;
@@ -349,7 +599,15 @@ module z8002
                       // ---- BATCH 3 ----
                       (state==S_INCDA_WR) || (state==S_LDBSTA_WR) ||
                       // ---- BATCH 4 ----
-                      (state==S_RESETB_WR) || (state==S_EXB_WR);
+                      (state==S_RESETB_WR) || (state==S_EXB_WR) ||
+                      // ---- BATCH 5 ----
+                      (state==S_DAB_RESB_WR) || (state==S_DAB_RESW_WR) ||
+                      (state==S_DAB_EXB_WR)  || (state==S_DAB_EXW_WR)  ||
+                      // ---- BATCH 5 PART 2 ----
+                      (state==S_TSETBI_WR) || (state==S_CLRBI_WR) || (state==S_COMI_WR) ||
+                      (state==S_NEGI_WR)   || (state==S_TSETI_WR) || (state==S_CLRI_WR) ||
+                      // ---- BATCH 6 ----
+                      (state==S_INCDAB_WR) || (state==S_INCBI_WR) || (state==S_INCWI_WR);
     // BATCH 2: S_MEMRDB/S_BITB_RD also word-align the read addr and keep only one byte of
     // the result (same shape as the pre-existing S_ADDB_RD) -- flagged for consistency even
     // though `wordacc` is currently left unconnected downstream (PolePosition_subcpu.sv).
@@ -358,8 +616,19 @@ module z8002
     // like S_LDBST_RD/WR they are a genuine word-wide RMW (read+merge+write the whole
     // word), matching the existing convention that only byte-discarding READS are
     // excluded.
+    // BATCH 5: S_DAB_BITB_RD is the same shape (BITB addr[,(rd)],#imm4 -- a read-only byte
+    // test discarding the other lane of the word read) -- added to the exclusion list.
+    // S_DAB_RESB_RD/S_DAB_EXB_RD are NOT added: like S_RESETB_RD/S_EXB_RD they are genuine
+    // word-wide RMW (read+merge+write the whole word). BATCH 5 PART 2: S_TESTBI_RD is the
+    // same read-only-byte-discard shape -- excluded. S_TSETBI_RD/S_CLRBI_RD are genuine RMW
+    // (need the full word for the merge-write) -- NOT excluded, same as their siblings.
+    // BATCH 6: S_ALUAB_RD is the same read-only-byte-discard shape (ALU rbd,addr[,(rs)]
+    // -- reads one byte lane of a word-aligned read, no writeback) -- excluded. S_INCDAB_
+    // RD/S_INCBI_RD/S_INCWI_RD are NOT added: genuine byte/word RMW (need the full word
+    // for the merge-write), same convention as their siblings.
     assign wordacc = (state!=S_ADDB_RD) && (state!=S_MEMRDB) && (state!=S_BITB_RD) &&
-                      (state!=S_LDBDA_RD);
+                      (state!=S_LDBDA_RD) && (state!=S_DAB_BITB_RD) && (state!=S_TESTBI_RD) &&
+                      (state!=S_ALUAB_RD);
     assign dout    = (state==S_MEMWR) ? R[src] :
                      (state==S_DA_WR) ? (daop==DA_STR ? R[src] :
                                          daop==DA_STI ? operand : 16'h0000) :
@@ -393,6 +662,28 @@ module z8002
                                                           : {resetb_new, operand[7:0]}) :
                      (state==S_EXB_WR    ) ? (R[src][0] ? {operand[15:8], exb_val}
                                                           : {exb_val, operand[7:0]}) :
+                     // ---- BATCH 5 ---- (lane = ea[0], the FETCHED/indexed address' LSB,
+                     // matching S_LDBDA_RD's convention -- not a register bit)
+                     (state==S_DAB_RESB_WR) ? (ea[0] ? {operand[15:8], daresb_new}
+                                                       : {daresb_new, operand[7:0]}) :
+                     (state==S_DAB_RESW_WR) ? (bitop_set ? (operand | bmask) : (operand & ~bmask)) :
+                     (state==S_DAB_EXB_WR ) ? (ea[0] ? {operand[15:8], exb_val}
+                                                       : {exb_val, operand[7:0]}) :
+                     (state==S_DAB_EXW_WR ) ? R[dst] :
+                     // ---- BATCH 5 PART 2 ---- (lane = R[dst][0], matching S_LDBST_WR's
+                     // established convention for a register-indirect byte RMW pointer)
+                     (state==S_TSETBI_WR) ? (R[dst][0] ? {operand[15:8], 8'hFF}
+                                                         : {8'hFF, operand[7:0]}) :
+                     (state==S_CLRBI_WR ) ? (R[dst][0] ? {operand[15:8], 8'h00}
+                                                         : {8'h00, operand[7:0]}) :
+                     (state==S_COMI_WR  ) ? operand :
+                     (state==S_NEGI_WR  ) ? operand :
+                     (state==S_TSETI_WR ) ? 16'hFFFF :
+                     (state==S_CLRI_WR  ) ? 16'h0000 :
+                     // ---- BATCH 6 ---- (all three WR states already hold the fully-
+                     // merged new word in `operand` by the time WR runs, computed in
+                     // their RD sibling -- same shape as the pre-existing S_INCDA_WR line)
+                     (state==S_INCDAB_WR || state==S_INCBI_WR || state==S_INCWI_WR) ? operand :
                                         16'h0000;
 
     assign dbg_pc=pc; assign dbg_fcw=fcw; assign dbg_ir=ir;
@@ -619,12 +910,18 @@ module z8002
                     end
                 end
                 // ---- LDCTL rd,ctrl (0x7D_0ccc, NIB3 bit3=0): read ctrl reg -> Rd ----
+                //   ctrl codes (Z8002 non-seg): 2=FCW 3=REFRESH 5=PSAPOFF 7=NSPOFF.
                 else if (din[15:8]==8'h7D && din[3]==1'b0) begin
                     pc<=pc2; retire<=1'b1;
                     case (din[2:0])
                         3'd2: R[din[7:4]]<=fcw;    // FCW
                         3'd5: R[din[7:4]]<=psap;   // PSAPOFF
-                        default: ; // refresh/nspseg/nspoff not modeled (unused by polepos)
+                        // 3=REFRESH: DRAM-refresh counter - no DRAM in this FPGA/BRAM system,
+                        // so there is nothing to read back; return 0. 7=NSPOFF / 4,6=seg
+                        // (Z8001-only): no effect in a non-segmented single hardware-SP model.
+                        // Explicit documented default (NOT a silent drop) - the only reachable
+                        // real use is the boot-time WRITE below (pp_sub @0x0012 ldctl refresh).
+                        default: R[din[7:4]]<=16'h0000;
                     endcase
                 end
                 // ---- LDCTL ctrl,rs (0x7D_1ccc, NIB3 bit3=1): write Rs -> ctrl reg ----
@@ -633,6 +930,10 @@ module z8002
                     case (din[2:0])
                         3'd2: fcw <=R[din[7:4]];   // FCW (plain overwrite; no NSP swap - S_N never toggles in polepos)
                         3'd5: psap<=R[din[7:4]];   // PSAPOFF
+                        // 3=REFRESH (pp_sub boot @0x0012 writes this): intentional no-op -
+                        // no DRAM refresh timer exists in this system. 7=NSPOFF / 4,6=seg:
+                        // no effect (non-segmented, single hardware SP). Documented, accepted,
+                        // NOT silently swallowed - a real reachable write that correctly does nothing.
                         default: ;
                     endcase
                 end
@@ -1263,6 +1564,462 @@ module z8002
                        | (dif17[16]?MC:0)|((dif17[15:0]==0)?MZ:0)|(dif17[15]?MS:0)|(v?MV:0);
                     pc<=pc2; retire<=1'b1;
                 end
+                // ==== BATCH 5: direct-address(+index) RESB/RES/SETB/SET/BITB/BIT/EXB/EX ====
+                // NIB2(din[7:4])=0 -> direct (ea<=din); NIB2!=0 -> indexed (idxr<=NIB2, EA
+                // computed in the *X_FETCH state as ea<=din+R[idxr], the Batch-4 pattern).
+                // Bit-index/exchange-reg field is NIB3(din[3:0]) for ALL eight regardless of
+                // NIB2 -- GET_BIT/GET_DST(OP0,NIB3), confirmed per z8000ops.hxx handler.
+                // ---- RESB addr[,(rd)],#imm4 (0x6200-0x62FF) : MAME Z62_0000_imm4_addr /
+                // Z62_ddN0_imm4_addr, byte RMW, flags ------. Real usage: 0 confirmed (see
+                // header) -- kept for family completeness, rides free on SETB's states. ----
+                else if (din[15:8]==8'h62 && din[7:4]==4'h0) begin
+                    bmask<=(16'h0001<<din[3:0]); bitop_set<=1'b0; pc<=pc2; state<=S_DAB_RESB_FETCH;
+                end
+                else if (din[15:8]==8'h62 && din[7:4]!=4'h0) begin
+                    bmask<=(16'h0001<<din[3:0]); bitop_set<=1'b0; idxr<=din[7:4];
+                    pc<=pc2; state<=S_DAB_RESBX_FETCH;
+                end
+                // ---- RES addr[,(rd)],#imm4 (0x6300-0x63FF) : MAME Z63_0000_imm4_addr /
+                // Z63_ddN0_imm4_addr, word RMW, flags ------. Real usage 22 (21 direct+1 idx). ----
+                else if (din[15:8]==8'h63 && din[7:4]==4'h0) begin
+                    bmask<=(16'h0001<<din[3:0]); bitop_set<=1'b0; pc<=pc2; state<=S_DAB_RESW_FETCH;
+                end
+                else if (din[15:8]==8'h63 && din[7:4]!=4'h0) begin
+                    bmask<=(16'h0001<<din[3:0]); bitop_set<=1'b0; idxr<=din[7:4];
+                    pc<=pc2; state<=S_DAB_RESWX_FETCH;
+                end
+                // ---- SETB addr[,(rd)],#imm4 (0x6400-0x64FF) : MAME Z64_0000_imm4_addr /
+                // Z64_ddN0_imm4_addr, byte RMW, flags ------. Real usage 1 (direct only). ----
+                else if (din[15:8]==8'h64 && din[7:4]==4'h0) begin
+                    bmask<=(16'h0001<<din[3:0]); bitop_set<=1'b1; pc<=pc2; state<=S_DAB_RESB_FETCH;
+                end
+                else if (din[15:8]==8'h64 && din[7:4]!=4'h0) begin
+                    bmask<=(16'h0001<<din[3:0]); bitop_set<=1'b1; idxr<=din[7:4];
+                    pc<=pc2; state<=S_DAB_RESBX_FETCH;
+                end
+                // ---- SET addr[,(rd)],#imm4 (0x6500-0x65FF) : MAME Z65_0000_imm4_addr /
+                // Z65_ddN0_imm4_addr, word RMW, flags ------. Real usage 43 (all direct). ----
+                else if (din[15:8]==8'h65 && din[7:4]==4'h0) begin
+                    bmask<=(16'h0001<<din[3:0]); bitop_set<=1'b1; pc<=pc2; state<=S_DAB_RESW_FETCH;
+                end
+                else if (din[15:8]==8'h65 && din[7:4]!=4'h0) begin
+                    bmask<=(16'h0001<<din[3:0]); bitop_set<=1'b1; idxr<=din[7:4];
+                    pc<=pc2; state<=S_DAB_RESWX_FETCH;
+                end
+                // ---- BITB addr[,(rd)],#imm4 (0x6600-0x66FF) : MAME Z66_0000_imm4_addr /
+                // Z66_ddN0_imm4_addr, read-only byte, flags -Z----. Real usage: 0 confirmed
+                // (see header) -- kept for family completeness, rides free on BIT's states. ----
+                else if (din[15:8]==8'h66 && din[7:4]==4'h0) begin
+                    bmask<=(16'h0001<<din[3:0]); pc<=pc2; state<=S_DAB_BITB_FETCH;
+                end
+                else if (din[15:8]==8'h66 && din[7:4]!=4'h0) begin
+                    bmask<=(16'h0001<<din[3:0]); idxr<=din[7:4]; pc<=pc2; state<=S_DAB_BITBX_FETCH;
+                end
+                // ---- BIT addr[,(rd)],#imm4 (0x6700-0x67FF) : MAME Z67_0000_imm4_addr /
+                // Z67_ddN0_imm4_addr, read-only word, flags -Z----. Real usage 52 (47 direct+
+                // 5 idx) -- the single highest-value opcode in this whole batch. ----
+                else if (din[15:8]==8'h67 && din[7:4]==4'h0) begin
+                    bmask<=(16'h0001<<din[3:0]); pc<=pc2; state<=S_DAB_BITW_FETCH;
+                end
+                else if (din[15:8]==8'h67 && din[7:4]!=4'h0) begin
+                    bmask<=(16'h0001<<din[3:0]); idxr<=din[7:4]; pc<=pc2; state<=S_DAB_BITWX_FETCH;
+                end
+                // ---- EXB rbd,addr[(rs)] (0x6C00-0x6CFF) : MAME Z6C_0000_dddd_addr /
+                // Z6C_ssN0_dddd_addr, byte RMW exchange, flags ------. `dst`=NIB3=value
+                // register's byte-reg-code (mirrors the existing register-indirect EXB
+                // convention, 0x2C). Real usage: 0 confirmed (see header) -- kept for family
+                // completeness, rides free on EX's states. ----
+                else if (din[15:8]==8'h6C && din[7:4]==4'h0) begin
+                    dst<=din[3:0]; pc<=pc2; state<=S_DAB_EXB_FETCH;
+                end
+                else if (din[15:8]==8'h6C && din[7:4]!=4'h0) begin
+                    dst<=din[3:0]; idxr<=din[7:4]; pc<=pc2; state<=S_DAB_EXBX_FETCH;
+                end
+                // ---- EX rd,addr[(rs)] (0x6D00-0x6DFF) : MAME Z6D_0000_dddd_addr /
+                // Z6D_ssN0_dddd_addr, word exchange, flags ------. Real usage 6 (all
+                // indexed -- direct form unused in the sample). ----
+                else if (din[15:8]==8'h6D && din[7:4]==4'h0) begin
+                    dst<=din[3:0]; pc<=pc2; state<=S_DAB_EXW_FETCH;
+                end
+                else if (din[15:8]==8'h6D && din[7:4]!=4'h0) begin
+                    dst<=din[3:0]; idxr<=din[7:4]; pc<=pc2; state<=S_DAB_EXWX_FETCH;
+                end
+                // ---- EX rd,rs reg-reg (0xAD, full range) : MAME ZAD_ssss_dddd "ex rd,rs",
+                // flags ------. Real usage 3. Register-only, single-cycle -- both sides read
+                // the OLD value combinationally (non-blocking assignment), so dst==src is a
+                // correct (harmless) no-op swap, mirroring the existing EXB reg-reg (0xAC). ----
+                else if (din[15:8]==8'hAD) begin
+                    R[din[3:0]]<=R[din[7:4]]; R[din[7:4]]<=R[din[3:0]];
+                    pc<=pc2; retire<=1'b1;
+                end
+                // ==== BATCH 5 PART 2: register-indirect @Rd simple family (0x0C/0x0D) =====
+                // dst=NIB2(din[7:4]), sub-op selector=NIB3(din[3:0]). z8000tbl.hxx's table
+                // range for this whole family starts at NIB2=1 (0x0c10/0x0d10, NOT 0x0c00/
+                // 0x0d00) -- dst=R0 is UNDEFINED here (falls to illegal on real MAME), so
+                // every arm below is gated din[7:4]!=0, matching the file's existing
+                // convention for other indirect forms (e.g. the 0x0D/NIB3=9 PUSH arm above).
+                // NOTE: the pre-existing baseline LD @rd,#imm16 arm (0x0D/NIB3=5, a few
+                // hundred lines up) does NOT have this guard -- flagged in the report as a
+                // likely pre-existing gap, not touched (out of scope: don't modify existing
+                // bodies). COMB @rd (0x0C_x_0) is SKIPPED: z8000ops.hxx's Z0C_ddN0_0000 body
+                // reads GET_DST(OP0,NIB3) instead of NIB2 like EVERY one of its siblings
+                // (NEGB/TESTB/TSETB/CLRB all correctly use NIB2) -- since NIB3 is the FIXED
+                // sub-op-selector nibble (always 0 for this specific sub-op), that reads back
+                // as dst=R0 ALWAYS regardless of the actually-encoded register, which looks
+                // like a genuine MAME source bug rather than real hardware behavior (see
+                // report). Real usage is 1 occurrence anyway, not worth the ambiguity. NEGB/
+                // CPB #imm8/LDB #imm8 (the remaining 0x0C sub-ops) have ZERO confirmed real
+                // ROM occurrences -- also skipped.
+                // ---- TESTB @rd (0x0C10-0x0CF0, NIB3=4) : MAME Z0C_ddN0_0100 "testb @rd",
+                // read-only, flags -ZSP-- (same formula as the register-direct TESTB rbd,
+                // 0x8Cd4). Real usage 10. ----
+                else if (din[15:8]==8'h0C && din[7:4]!=4'h0 && din[3:0]==4'h4) begin
+                    dst<=din[7:4]; pc<=pc2; state<=S_TESTBI_RD;
+                end
+                // ---- TSETB @rd (0x0C16-0x0CF6, NIB3=6) : MAME Z0C_ddN0_0110 "tsetb @rd",
+                // byte RMW (wordacc rule), flags --S---. S = old bit7 (tested off the READ,
+                // before the write); new value unconditionally 0xFF. Real usage 5. ----
+                else if (din[15:8]==8'h0C && din[7:4]!=4'h0 && din[3:0]==4'h6) begin
+                    dst<=din[7:4]; pc<=pc2; state<=S_TSETBI_RD;
+                end
+                // ---- CLRB @rd (0x0C18-0x0CF8, NIB3=8) : MAME Z0C_ddN0_1000 "clrb @rd",
+                // byte RMW (wordacc rule, unconditional 0), flags ------. Real usage 2. ----
+                else if (din[15:8]==8'h0C && din[7:4]!=4'h0 && din[3:0]==4'h8) begin
+                    dst<=din[7:4]; pc<=pc2; state<=S_CLRBI_RD;
+                end
+                // ---- COM @rd (0x0D10-0x0DF0, NIB3=0) : MAME Z0D_ddN0_0000 "com @rd", word
+                // RMW, flags -ZS--- (same formula as the register-direct COM rd, 0x8Dd0).
+                // Real usage 2. ----
+                else if (din[15:8]==8'h0D && din[7:4]!=4'h0 && din[3:0]==4'h0) begin
+                    dst<=din[7:4]; pc<=pc2; state<=S_COMI_RD;
+                end
+                // ---- CP @rd,#imm16 (0x0D11-0x0DF1, NIB3=1) : MAME Z0D_ddN0_0001_imm16
+                // "cp @rd,imm16", read-only compare, flags CZSV-- (same formula as the
+                // existing word CP aluop in S_ALU). Real usage 11. ----
+                else if (din[15:8]==8'h0D && din[7:4]!=4'h0 && din[3:0]==4'h1) begin
+                    dst<=din[7:4]; pc<=pc2; state<=S_CPRI_IMM;
+                end
+                // ---- NEG @rd (0x0D12-0x0DF2, NIB3=2) : MAME Z0D_ddN0_0010 "neg @rd", word
+                // RMW, flags CZSV-- (same formula as the register-direct NEG rd, 0x8Dd2).
+                // Real usage 1. ----
+                else if (din[15:8]==8'h0D && din[7:4]!=4'h0 && din[3:0]==4'h2) begin
+                    dst<=din[7:4]; pc<=pc2; state<=S_NEGI_RD;
+                end
+                // ---- TEST @rd (0x0D14-0x0DF4, NIB3=4) : MAME Z0D_ddN0_0100 "test @rd",
+                // read-only, flags -ZS--- (same formula as the existing DA_TST direct-address
+                // test). Real usage 2. ----
+                else if (din[15:8]==8'h0D && din[7:4]!=4'h0 && din[3:0]==4'h4) begin
+                    dst<=din[7:4]; pc<=pc2; state<=S_TESTI_RD;
+                end
+                // ---- TSET @rd (0x0D16-0x0DF6, NIB3=6) : MAME Z0D_ddN0_0110 "tset @rd",
+                // word RMW, flags --S---. S = old bit15; new value unconditionally 0xFFFF.
+                // Real usage 2. ----
+                else if (din[15:8]==8'h0D && din[7:4]!=4'h0 && din[3:0]==4'h6) begin
+                    dst<=din[7:4]; pc<=pc2; state<=S_TSETI_RD;
+                end
+                // ---- CLR @rd (0x0D18-0x0DF8, NIB3=8) : MAME Z0D_ddN0_1000 "clr @rd", plain
+                // word write (no read needed), flags ------. Real usage 6. ----
+                else if (din[15:8]==8'h0D && din[7:4]!=4'h0 && din[3:0]==4'h8) begin
+                    dst<=din[7:4]; pc<=pc2; state<=S_CLRI_WR;
+                end
+                // ==== BATCH 6: ALU addr[,(rs)] direct/indexed (0x40-0x4B, task item 1) ===
+                // ADDB/ADD/SUBB/SUB/ORB/OR/ANDB/AND/XORB/XOR/CPB/CP rbd/rd,addr[,(rs)].
+                // dst=NIB3 always (GET_DST(OP0,NIB3), confirmed per z8000ops.hxx for all
+                // 12); NIB2=0 -> direct (ea<=addr word), NIB2!=0 -> indexed (idxr<=NIB2,
+                // ea<=addr+R[idxr] in the *X_FETCH state, Batch-4 shape). Odd opcode byte
+                // (41,43,45,47,49,4B) = word form; even (40,42,44,46,48,4A) = byte form --
+                // verified against the table's Z40/Z41-style pairing for every one of the
+                // 6 pairs. Dest is ALWAYS a register (RB(dst)/RW(dst)) -- addr is only ever
+                // the SOURCE operand, no memory write for any of these 12. ----
+                else if (din[15:8]>=8'h40 && din[15:8]<=8'h4B) begin
+                    dst<=din[3:0]; pc<=pc2;
+                    case (din[15:8])
+                        8'h40,8'h41: aluop<=ADD; 8'h42,8'h43: aluop<=SUB;
+                        8'h44,8'h45: aluop<=OR;  8'h46,8'h47: aluop<=AND;
+                        8'h48,8'h49: aluop<=XOR; default:     aluop<=CP;   // 4A,4B
+                    endcase
+                    if (din[8]) begin // odd byte1 -> word form
+                        if (din[7:4]==4'h0) state<=S_ALUA_FETCH;
+                        else begin idxr<=din[7:4]; state<=S_ALUAX_FETCH; end
+                    end else begin      // even byte1 -> byte form
+                        if (din[7:4]==4'h0) state<=S_ALUAB_FETCH;
+                        else begin idxr<=din[7:4]; state<=S_ALUABX_FETCH; end
+                    end
+                end
+                // ==== BATCH 6: CPL rrd,imm32 (0x1000-0x100F, task item 2) ================
+                // MAME Z10_0000_dddd_imm32, compare-only long against a 32-bit immediate
+                // (imm32={word1(hi),word2(lo)}, same GET_IMM32 convention as the existing
+                // LDL RRd,#imm32). Complements the already-implemented CPL @rs (NIB2!=0,
+                // a few hundred lines up) -- this is exactly its NIB2==0 counterpart. ----
+                else if (din[15:8]==8'h10 && din[7:4]==4'h0) begin
+                    dst<=din[3:0]; pc<=pc2; state<=S_CPLI_HI;
+                end
+                // ==== BATCH 6: register-indirect INCB/INC/DECB/DEC @rd (0x28-0x2B) =======
+                // EA=R[dst] directly, no address word to fetch. Byte forms (0x28/0x2A) are
+                // word-aligned RMW (wordacc rule, lane=R[dst][0], mirrors S_TSETBI/S_CLRBI);
+                // word forms (0x29/0x2B) mirror the already-implemented direct-address word
+                // INC/DEC (S_INCDA_RD) one level more direct. aluop(ADD/SUB) + mcnt(imm4m1
+                // nibble) reused exactly as the direct-address family already does. ----
+                else if (din[15:8]==8'h28 && din[7:4]!=4'h0) begin
+                    dst<=din[7:4]; mcnt<=din[3:0]; aluop<=ADD; pc<=pc2; state<=S_INCBI_RD;
+                end
+                else if (din[15:8]==8'h29 && din[7:4]!=4'h0) begin
+                    dst<=din[7:4]; mcnt<=din[3:0]; aluop<=ADD; pc<=pc2; state<=S_INCWI_RD;
+                end
+                else if (din[15:8]==8'h2A && din[7:4]!=4'h0) begin
+                    dst<=din[7:4]; mcnt<=din[3:0]; aluop<=SUB; pc<=pc2; state<=S_INCBI_RD;
+                end
+                else if (din[15:8]==8'h2B && din[7:4]!=4'h0) begin
+                    dst<=din[7:4]; mcnt<=din[3:0]; aluop<=SUB; pc<=pc2; state<=S_INCWI_RD;
+                end
+                // ==== BATCH 6: byte INC/DEC addr[,(rs)],#n (0x68/0x6A) ===================
+                // Byte siblings of the already-implemented word INC/DEC direct/indexed
+                // (0x69/0x6B) -- identical FETCH shape (direct: ea<=addr; indexed: idxr<=
+                // NIB2, ea<=addr+R[idxr] in the *X_FETCH state), byte-lane RMW merge in RD
+                // (ea[0] lane, same convention as S_LDBSTA/S_RESETB). ----
+                else if (din[15:8]==8'h68 && din[7:4]==4'h0) begin
+                    mcnt<=din[3:0]; aluop<=ADD; pc<=pc2; state<=S_INCDAB_FETCH;
+                end
+                else if (din[15:8]==8'h68 && din[7:4]!=4'h0) begin
+                    mcnt<=din[3:0]; aluop<=ADD; idxr<=din[7:4]; pc<=pc2; state<=S_INCDABX_FETCH;
+                end
+                else if (din[15:8]==8'h6A && din[7:4]==4'h0) begin
+                    mcnt<=din[3:0]; aluop<=SUB; pc<=pc2; state<=S_INCDAB_FETCH;
+                end
+                else if (din[15:8]==8'h6A && din[7:4]!=4'h0) begin
+                    mcnt<=din[3:0]; aluop<=SUB; idxr<=din[7:4]; pc<=pc2; state<=S_INCDABX_FETCH;
+                end
+                // ==== BATCH 6: missing indexed arms for LD rd,addr(rs) / LD addr(rs),rs ==
+                // (0x61/0x6F, NIB2!=0) -- the direct forms (NIB2==0) were already done;
+                // this closes the indexed side using the EXISTING, unmodified S_DA_RD/
+                // S_DA_WR tail (daop already selects LDR/STR), Batch-4 X_FETCH shape. ----
+                else if (din[15:8]==8'h61 && din[7:4]!=4'h0) begin
+                    dst<=din[3:0]; daop<=DA_LDR; idxr<=din[7:4]; pc<=pc2; state<=S_LDAX_FETCH;
+                end
+                else if (din[15:8]==8'h6F && din[7:4]!=4'h0) begin
+                    src<=din[3:0]; daop<=DA_STR; idxr<=din[7:4]; pc<=pc2; state<=S_LDSAX_FETCH;
+                end
+                // ==== BATCH 6: register-only closures (zero new states) ===================
+                // ---- COMB rbd (0x8Cd0) : MAME Z8C_dddd_0000, flags -ZSP-- (CHK_XXXB_ZSP,
+                // same parity convention as the already-implemented byte AND/OR/XOR/TESTB
+                // -- verified against the macro body, NOT assumed -ZS--- from the mnemonic
+                // name alone). ----
+                else if (din[15:8]==8'h8C && din[3:0]==4'h0) begin
+                    dbyte = din[7] ? R[din[6:4]][7:0] : R[din[6:4]][15:8];
+                    res8 = ~dbyte; p=(~^res8);
+                    if (din[7]) R[din[6:4]][7:0]<=res8; else R[din[6:4]][15:8]<=res8;
+                    fcw<=(fcw & ~(MZ|MS|MV)) | ((res8==8'h00)?MZ:0)|(res8[7]?MS:0)|(p?MV:0);
+                    pc<=pc2; retire<=1'b1;
+                end
+                // ---- NEGB rbd (0x8Cd2) : MAME Z8C_dddd_0010, flags CZSV-- (same formula
+                // as the already-implemented word NEG rd, 0x8Dd2, one level narrower). ----
+                else if (din[15:8]==8'h8C && din[3:0]==4'h2) begin
+                    dbyte = din[7] ? R[din[6:4]][7:0] : R[din[6:4]][15:8];
+                    res8 = 8'h00 - dbyte; v=(res8==8'h80);
+                    if (din[7]) R[din[6:4]][7:0]<=res8; else R[din[6:4]][15:8]<=res8;
+                    fcw<=(fcw & ~(MC|MZ|MS|MV)) | ((res8!=8'h00)?MC:0)|((res8==8'h00)?MZ:0)|(res8[7]?MS:0)|(v?MV:0);
+                    pc<=pc2; retire<=1'b1;
+                end
+                // ---- TSETB rbd (0x8Cd6) : MAME Z8C_dddd_0110, flags --S--- (S=old bit7,
+                // unconditional 0xFF -- same formula as the already-implemented register-
+                // INDIRECT TSETB @rd, S_TSETBI_RD, one level more direct: no memory access
+                // at all). ----
+                else if (din[15:8]==8'h8C && din[3:0]==4'h6) begin
+                    dbyte = din[7] ? R[din[6:4]][7:0] : R[din[6:4]][15:8];
+                    fcw<=(fcw & ~MS) | (dbyte[7]?MS:0);
+                    if (din[7]) R[din[6:4]][7:0]<=8'hFF; else R[din[6:4]][15:8]<=8'hFF;
+                    pc<=pc2; retire<=1'b1;
+                end
+                // ---- LDCTLB rbd,flags (0x8Cd1) : MAME Z8C_dddd_0001 "ldctlb rbd,flags" --
+                // reads the CURRENT flag byte (FCW bits[7:2] = C/Z/S/V/D/H, exactly this
+                // file's MC/MZ/MS/MV/MDA/MH bit positions) into rbd. The doc-comment's
+                // "flags CZSVDH" describes which bits get READ, not new flags computed --
+                // fcw itself is untouched by this arm. ----
+                else if (din[15:8]==8'h8C && din[3:0]==4'h1) begin
+                    if (din[7]) R[din[6:4]][7:0]<=(fcw[7:0] & 8'hFC); else R[din[6:4]][15:8]<=(fcw[7:0] & 8'hFC);
+                    pc<=pc2; retire<=1'b1;
+                end
+                // ---- LDCTLB flags,rbd (0x8Cd9) : MAME Z8C_dddd_1001 "ldctlb flags,rbd" --
+                // writes rbd's value into FCW bits[7:2], mirror of the read form above. ----
+                else if (din[15:8]==8'h8C && din[3:0]==4'h9) begin
+                    dbyte = din[7] ? R[din[6:4]][7:0] : R[din[6:4]][15:8];
+                    fcw<=(fcw & ~16'h00FC) | {8'h00, (dbyte & 8'hFC)};
+                    pc<=pc2; retire<=1'b1;
+                end
+                // ---- NOP (0x8D07 EXACT) : MAME Z8D_0000_0111 "nop" -- single exact
+                // opcode (not a NIB-varying family like its 0x8D siblings), no effect. ----
+                else if (din==16'h8D07) begin
+                    pc<=pc2; retire<=1'b1;
+                end
+                // ---- TEST rd (0x8Dd4) : MAME Z8D_dddd_0100 "test rd", flags -ZS--- (same
+                // TESTW formula as the existing direct-address TEST, DA_TST). ----
+                else if (din[15:8]==8'h8D && din[3:0]==4'h4) begin
+                    fcw<=(fcw & ~(MZ|MS)) | ((R[din[7:4]]==16'h0000)?MZ:0)|(R[din[7:4]][15]?MS:0);
+                    pc<=pc2; retire<=1'b1;
+                end
+                // ---- TSET rd (0x8Dd6) : MAME Z8D_dddd_0110 "tset rd", flags --S--- (S=old
+                // bit15, unconditional 0xFFFF -- same formula as the already-implemented
+                // register-INDIRECT TSET @rd, S_TSETI_RD). NOTE: this register-DIRECT form
+                // was explicitly, deliberately skipped in Batch 4 citing "zero real ROM
+                // occurrences" for THAT batch's narrower scope -- this task's mandate is
+                // the stronger "close the whole decode, no valid encoding may trap," which
+                // supersedes that prioritization call, not a re-litigation of it (see
+                // report). ----
+                else if (din[15:8]==8'h8D && din[3:0]==4'h6) begin
+                    fcw<=(fcw & ~MS) | (R[din[7:4]][15]?MS:0);
+                    R[din[7:4]]<=16'hFFFF;
+                    pc<=pc2; retire<=1'b1;
+                end
+                // ---- SETFLG/RESFLG/COMFLG imm4 (0x8D_imm4_0001/0011/0101, NIB0=1/3/5) :
+                // MAME Z8D_imm4_0001/0011/0101 -- set/clear/toggle FCW bits[7:4] (C/Z/S/V)
+                // directly from the OPCODE WORD's own bits[7:4] (m_fcw|=/&=~/^= m_op[0]&
+                // 0x00f0), no register/memory operand at all. fcw's own bit layout already
+                // IS C=b7 Z=b6 S=b5 V=b4, so `din&16'h00F0` lines up with zero shifting. ----
+                else if (din[15:8]==8'h8D && din[3:0]==4'h1) begin
+                    fcw<=fcw | (din & 16'h00F0); pc<=pc2; retire<=1'b1;
+                end
+                else if (din[15:8]==8'h8D && din[3:0]==4'h3) begin
+                    fcw<=fcw & ~(din & 16'h00F0); pc<=pc2; retire<=1'b1;
+                end
+                else if (din[15:8]==8'h8D && din[3:0]==4'h5) begin
+                    fcw<=fcw ^ (din & 16'h00F0); pc<=pc2; retire<=1'b1;
+                end
+                // ---- TESTL rrd (0x9C00-0x9CF8, NIB3={0,8} only per z8000tbl.hxx's step=8
+                // table row -- the handler body ignores NIB3 entirely, GET_DST uses NIB2)
+                // : MAME Z9C_dddd_1000 "testl rrd", flags -ZS--- (32-bit long test,
+                // register-only; pair-select = {dst[3:1],1'b0}, the file's established
+                // bit0-truncation convention). ----
+                else if (din[15:8]==8'h9C && (din[3:0]==4'h0 || din[3:0]==4'h8)) begin
+                    fcw<=(fcw & ~(MZ|MS))
+                       | (({R[{din[7:5],1'b0}],R[{din[7:5],1'b0}+4'd1]}==32'h00000000)?MZ:0)
+                       | (R[{din[7:5],1'b0}][15]?MS:0);
+                    pc<=pc2; retire<=1'b1;
+                end
+                // ---- RESB/RES/SETB/SET/BITB/BIT rd,imm4 register-DIRECT forms (0xA2-
+                // 0xA7, full range each) : MAME ZA2-ZA7_dddd_imm4 -- register-only bit-ops
+                // (no memory access at all), distinct from the already-implemented
+                // memory-form @Rd,#imm4 family (0x22-0x27) and direct-address(+index) form
+                // (0x62-0x67). Reuses the same bmask-shift shape; BIT/BITB flags -Z----
+                // (Z=1 means tested bit is 0, matching the existing memory-form convention);
+                // RES/SET/RESB/SETB flags ------. ----
+                else if (din[15:8]==8'hA2) begin // RESB rbd,imm4
+                    dbyte = din[7] ? R[din[6:4]][7:0] : R[din[6:4]][15:8];
+                    res8 = dbyte & ~(8'h01<<din[3:0]);
+                    if (din[7]) R[din[6:4]][7:0]<=res8; else R[din[6:4]][15:8]<=res8;
+                    pc<=pc2; retire<=1'b1;
+                end
+                else if (din[15:8]==8'hA3) begin // RES rd,imm4
+                    R[din[7:4]] <= R[din[7:4]] & ~(16'h0001<<din[3:0]);
+                    pc<=pc2; retire<=1'b1;
+                end
+                else if (din[15:8]==8'hA4) begin // SETB rbd,imm4
+                    dbyte = din[7] ? R[din[6:4]][7:0] : R[din[6:4]][15:8];
+                    res8 = dbyte | (8'h01<<din[3:0]);
+                    if (din[7]) R[din[6:4]][7:0]<=res8; else R[din[6:4]][15:8]<=res8;
+                    pc<=pc2; retire<=1'b1;
+                end
+                else if (din[15:8]==8'hA5) begin // SET rd,imm4
+                    R[din[7:4]] <= R[din[7:4]] | (16'h0001<<din[3:0]);
+                    pc<=pc2; retire<=1'b1;
+                end
+                else if (din[15:8]==8'hA6) begin // BITB rbd,imm4
+                    dbyte = din[7] ? R[din[6:4]][7:0] : R[din[6:4]][15:8];
+                    fcw<=(fcw & ~MZ) | (((dbyte & (8'h01<<din[3:0]))==8'h00) ? MZ : 16'h0000);
+                    pc<=pc2; retire<=1'b1;
+                end
+                else if (din[15:8]==8'hA7) begin // BIT rd,imm4
+                    fcw<=(fcw & ~MZ) | (((R[din[7:4]] & (16'h0001<<din[3:0]))==16'h0000) ? MZ : 16'h0000);
+                    pc<=pc2; retire<=1'b1;
+                end
+                // ---- TCCB cc,rbd / TCC cc,rd (0xAE/0xAF, full range) : MAME ZAE/ZAF_
+                // dddd_cccc "tccb/tcc cc,rbd/rd", flags ------ -- bit0 UNCONDITIONALLY
+                // replaced by cc_true(cc) (not OR'd -- MAME clears bit0 first, then
+                // conditionally sets it, net effect = direct assignment). Reuses the
+                // existing cc_true() function unchanged (same cc encoding as JR/RET/JP cc). ----
+                else if (din[15:8]==8'hAE) begin
+                    dbyte = din[7] ? R[din[6:4]][7:0] : R[din[6:4]][15:8];
+                    res8 = {dbyte[7:1], cc_true(din[3:0],fcw[FC],fcw[FZ],fcw[FS],fcw[FV])};
+                    if (din[7]) R[din[6:4]][7:0]<=res8; else R[din[6:4]][15:8]<=res8;
+                    pc<=pc2; retire<=1'b1;
+                end
+                else if (din[15:8]==8'hAF) begin
+                    R[din[7:4]] <= {R[din[7:4]][15:1], cc_true(din[3:0],fcw[FC],fcw[FZ],fcw[FS],fcw[FV])};
+                    pc<=pc2; retire<=1'b1;
+                end
+                // ---- LDK rd,imm4 (0xBD, full range) : MAME ZBD_dddd_imm4 "ldk rd,imm4",
+                // flags ------ -- zero-extended 4-bit immediate load, cheapest possible
+                // instruction (no memory access, no flags, single word). ----
+                else if (din[15:8]==8'hBD) begin
+                    R[din[7:4]] <= {12'h000, din[3:0]};
+                    pc<=pc2; retire<=1'b1;
+                end
+                // ---- RLDB rba,rbb (0xBC, full range) : MAME ZBC_aaaa_bbbb "rldb rba,rbb"
+                // -- a=NIB2,b=NIB3 (both plain byte-reg-codes, NOT gated non-zero). Traced
+                // term-by-term through the ACTUAL C body (not the "rotate" mnemonic's
+                // naive 3-nibble-cycle implication): new_a={old_b_lo,old_a_hi}; new_b=
+                // old_b UNCHANGED (tmp=old_b captured before any write, then RB(b)=
+                // (RB(b)&0xf0)|(tmp&0x0f) algebraically reduces to old_b itself) -- verified
+                // by hand, not assumed from the name. Flags -Z---- (Z from the new/
+                // unchanged b value). ----
+                else if (din[15:8]==8'hBC) begin
+                    dbyte     = din[7] ? R[din[6:4]][7:0] : R[din[6:4]][15:8];  // old a
+                    operand_b = din[3] ? R[din[2:0]][7:0] : R[din[2:0]][15:8];  // old b (=tmp)
+                    res8 = {operand_b[3:0], dbyte[7:4]};                        // new a
+                    if (din[7]) R[din[6:4]][7:0]<=res8; else R[din[6:4]][15:8]<=res8;
+                    if (din[3]) R[din[2:0]][7:0]<=operand_b; else R[din[2:0]][15:8]<=operand_b; // new b = old b
+                    fcw<=(fcw & ~MZ) | ((operand_b==8'h00)?MZ:0);
+                    pc<=pc2; retire<=1'b1;
+                end
+                // ---- RRDB rba,rbb (0xBE, full range) : MAME ZBE_aaaa_bbbb "rrdb rba,rbb"
+                // -- same term-by-term trace discipline as RLDB above. tmp=old_a (captured
+                // FIRST here, the opposite operand from RLDB's tmp -- not a copy-paste
+                // error, verified against the actual body): new_a={old_a_lo,old_b_lo};
+                // new_b={old_b_hi,old_a_hi}. Both registers genuinely change here (unlike
+                // RLDB). Flags -Z---- (Z from the new b value). ----
+                else if (din[15:8]==8'hBE) begin
+                    dbyte     = din[7] ? R[din[6:4]][7:0] : R[din[6:4]][15:8];  // old a (=tmp)
+                    operand_b = din[3] ? R[din[2:0]][7:0] : R[din[2:0]][15:8];  // old b
+                    res8 = {dbyte[3:0], operand_b[3:0]};                        // new a
+                    if (din[7]) R[din[6:4]][7:0]<=res8; else R[din[6:4]][15:8]<=res8;
+                    res8 = {operand_b[7:4], dbyte[7:4]};                        // new b
+                    if (din[3]) R[din[2:0]][7:0]<=res8; else R[din[2:0]][15:8]<=res8;
+                    fcw<=(fcw & ~MZ) | ((res8==8'h00)?MZ:0);
+                    pc<=pc2; retire<=1'b1;
+                end
+                // ---- EXTSL rqd (0xB1d7, NIB0=7) : MAME ZB1_dddd_0111 "extsl rqd", flags
+                // ------ -- sign-extends the LOW 32 bits of the quad (R[qbase+2]:
+                // R[qbase+3]) into the HIGH 32 bits (R[qbase]:R[qbase+1]), one level wider
+                // than the already-implemented EXTS (16->32) at 0xB1dA, same RQ(n)
+                // low-two-bits-truncation derivation (header comment). ----
+                else if (din[15:8]==8'hB1 && din[3:0]==4'h7) begin
+                    qbase = {din[7:6],2'b00};
+                    R[qbase]      <= {16{R[qbase+4'd2][15]}};
+                    R[qbase+4'd1] <= {16{R[qbase+4'd2][15]}};
+                    pc<=pc2; retire<=1'b1;
+                end
+                // ---- LDB rd,imm8 short form (0xC000-0xCFFF, full range) : MAME
+                // ZC_dddd_imm8 "ldb rbd,imm8" -- dst=NIB1(din[11:8], byte-reg-code),
+                // imm8=din[7:0] (the SAME opcode word's low byte -- single-word
+                // instruction, no second-word fetch at all). flags ------. ----
+                else if (din[15:12]==4'hC) begin
+                    if (din[11]) R[din[10:8]][7:0]<=din[7:0]; else R[din[10:8]][15:8]<=din[7:0];
+                    pc<=pc2; retire<=1'b1;
+                end
+                // ---- catch-all trap. INTENTIONALLY-UNIMPLEMENTED families land here (see
+                //   scope decision 2026-07-18: "close reachable gaps only"). All are UNREACHABLE
+                //   by the Pole Position sub ROMs (co-sim runs both to completion, 0 illegal):
+                //     0x30-0x37  load-relative / base+displacement (LDR/LDRB/LDRL, LDB base+disp)
+                //     0x38-0x3F  I/O + block I/O (IN/OUT/SIN/SOUT/INIR/OTIR...) - no I/O device
+                //                on the sub-CPUs (the sc/in/out disasm hits are inside the
+                //                0x38A0-0x3E08 ASCII data-table, misdecoded - confirmed false)
+                //   (full detail + the NON-OPCODE gaps are in the file-header manifest)
+                //     0x70-0x77  base+index loads, LDA/LDAR
+                //     0x79/7A/7B(partial)/7E/7F  LDPS/HALT/MSET.../SC - system, unused
+                //     0xB8/BA/BB block-transfer/compare/translate strings (LDIR/CPIR/TRIB...)
+                //     0x0E/0F/4E/8E/8F  EPU extended instructions - no EPU present
+                //   Trapping (not silently ignoring) matches MAME's zinvalid for anything the
+                //   real hardware wouldn't decode. Implement a family here only if a ROM path
+                //   is ever shown to reach it.
                 else begin illegal<=1'b1; state<=S_ILLEGAL; end
               end
             end
@@ -1782,6 +2539,208 @@ module z8002
                 else        R[dst[2:0]][15:8]<= R[src][0] ? operand[7:0] : operand[15:8];
                 retire<=1'b1; state<=S_FETCH0;
             end
+
+            // ==== BATCH 5: direct-address(+index) RESB/RES/SETB/SET/BITB/BIT/EXB/EX =====
+            // Each FETCH computes ea<=din (direct) or ea<=din+R[idxr] (indexed, the Batch-4
+            // *X_FETCH shape), then joins a shared RD (and WR, for ops that write) tail.
+            // ---- RESB/SETB addr[,(rd)],#imm4 (byte RMW; bmask/bitop_set shared with the
+            //      RES/SET word pair below). Lane = ea[0]. ----
+            S_DAB_RESB_FETCH:  begin ea<=din;         pc<=pc+16'd2; state<=S_DAB_RESB_RD; end
+            S_DAB_RESBX_FETCH: begin ea<=din+R[idxr]; pc<=pc+16'd2; state<=S_DAB_RESB_RD; end
+            S_DAB_RESB_RD: begin operand<=din; state<=S_DAB_RESB_WR; end  // addr=ea&~1
+            S_DAB_RESB_WR: begin retire<=1'b1; state<=S_FETCH0; end       // addr=ea&~1,dout=merged,we=1
+
+            // ---- RES/SET addr[,(rd)],#imm4 (word RMW; bitop_set: 0=AND~bit 1=OR bit). ----
+            S_DAB_RESW_FETCH:  begin ea<=din;         pc<=pc+16'd2; state<=S_DAB_RESW_RD; end
+            S_DAB_RESWX_FETCH: begin ea<=din+R[idxr]; pc<=pc+16'd2; state<=S_DAB_RESW_RD; end
+            S_DAB_RESW_RD: begin operand<=din; state<=S_DAB_RESW_WR; end  // addr=ea
+            S_DAB_RESW_WR: begin retire<=1'b1; state<=S_FETCH0; end       // addr=ea,dout=merged,we=1
+
+            // ---- BITB addr[,(rd)],#imm4 (read-only byte, flags -Z----; Z=1 means the
+            //      tested bit is 0). Lane = ea[0]. ----
+            S_DAB_BITB_FETCH:  begin ea<=din;         pc<=pc+16'd2; state<=S_DAB_BITB_RD; end
+            S_DAB_BITBX_FETCH: begin ea<=din+R[idxr]; pc<=pc+16'd2; state<=S_DAB_BITB_RD; end
+            S_DAB_BITB_RD: begin // addr=ea&~1
+                dbyte = ea[0] ? din[7:0] : din[15:8];
+                fcw<=(fcw & ~MZ) | (((dbyte & bmask[7:0])==0) ? MZ : 16'h0000);
+                retire<=1'b1; state<=S_FETCH0;
+            end
+
+            // ---- BIT addr[,(rd)],#imm4 (read-only word, flags -Z----). ----
+            S_DAB_BITW_FETCH:  begin ea<=din;         pc<=pc+16'd2; state<=S_DAB_BITW_RD; end
+            S_DAB_BITWX_FETCH: begin ea<=din+R[idxr]; pc<=pc+16'd2; state<=S_DAB_BITW_RD; end
+            S_DAB_BITW_RD: begin // addr=ea
+                fcw<=(fcw & ~MZ) | (((din & bmask)==0) ? MZ : 16'h0000);
+                retire<=1'b1; state<=S_FETCH0;
+            end
+
+            // ---- EXB rbd,addr[(rs)] (byte RMW exchange; flags ------, untouched). `dst`
+            //      holds the value register's byte-reg-code; reuses the existing generic
+            //      `exb_val` wire unchanged. Lane = ea[0]. ----
+            S_DAB_EXB_FETCH:  begin ea<=din;         pc<=pc+16'd2; state<=S_DAB_EXB_RD; end
+            S_DAB_EXBX_FETCH: begin ea<=din+R[idxr]; pc<=pc+16'd2; state<=S_DAB_EXB_RD; end
+            S_DAB_EXB_RD: begin operand<=din; state<=S_DAB_EXB_WR; end    // addr=ea&~1
+            S_DAB_EXB_WR: begin                                           // addr=ea&~1,dout=merged,we=1
+                if (dst[3]) R[dst[2:0]][7:0] <= ea[0] ? operand[7:0] : operand[15:8];
+                else        R[dst[2:0]][15:8]<= ea[0] ? operand[7:0] : operand[15:8];
+                retire<=1'b1; state<=S_FETCH0;
+            end
+
+            // ---- EX rd,addr[(rs)] (word exchange; flags ------, untouched). ----
+            S_DAB_EXW_FETCH:  begin ea<=din;         pc<=pc+16'd2; state<=S_DAB_EXW_RD; end
+            S_DAB_EXWX_FETCH: begin ea<=din+R[idxr]; pc<=pc+16'd2; state<=S_DAB_EXW_RD; end
+            S_DAB_EXW_RD: begin operand<=din; state<=S_DAB_EXW_WR; end    // addr=ea
+            S_DAB_EXW_WR: begin R[dst]<=operand; retire<=1'b1; state<=S_FETCH0; end // addr=ea,dout=R[dst](old),we=1
+
+            // ==== BATCH 5 PART 2: register-indirect @Rd simple family (0x0C/0x0D) =======
+            // ---- TESTB @rd (read-only byte, flags -ZSP--; same formula as register-direct
+            //      TESTB rbd). ----
+            S_TESTBI_RD: begin // addr=R[dst]&16'hFFFE
+                dbyte = R[dst][0] ? din[7:0] : din[15:8];
+                p = (~^dbyte);
+                fcw<=(fcw & ~(MZ|MS|MV)) | ((dbyte==8'h00)?MZ:0)|(dbyte[7]?MS:0)|(p?MV:0);
+                retire<=1'b1; state<=S_FETCH0;
+            end
+
+            // ---- TSETB @rd (byte RMW; S = old bit7, new value unconditionally 0xFF). ----
+            S_TSETBI_RD: begin // addr=R[dst]&16'hFFFE
+                dbyte = R[dst][0] ? din[7:0] : din[15:8];
+                fcw<=(fcw & ~MS) | (dbyte[7]?MS:0);
+                operand<=din; state<=S_TSETBI_WR;
+            end
+            S_TSETBI_WR: begin retire<=1'b1; state<=S_FETCH0; end  // addr=R[dst]&16'hFFFE,dout=merged(0xFF lane),we=1
+
+            // ---- CLRB @rd (byte RMW, unconditional 0x00, flags ------). ----
+            S_CLRBI_RD: begin operand<=din; state<=S_CLRBI_WR; end // addr=R[dst]&16'hFFFE
+            S_CLRBI_WR: begin retire<=1'b1; state<=S_FETCH0; end  // addr=R[dst]&16'hFFFE,dout=merged(0x00 lane),we=1
+
+            // ---- COM @rd (word RMW; same formula as register-direct COM rd). ----
+            S_COMI_RD: begin
+                res16 = ~din;
+                fcw<=(fcw & ~(MZ|MS)) | ((res16==16'h0000)?MZ:0)|(res16[15]?MS:0);
+                operand<=res16; state<=S_COMI_WR;
+            end
+            S_COMI_WR: begin retire<=1'b1; state<=S_FETCH0; end   // addr=R[dst],dout=operand,we=1
+
+            // ---- CP @rd,#imm16 (read-only compare; same formula as the word CP aluop). ----
+            S_CPRI_IMM: begin operand<=din; pc<=pc+16'd2; state<=S_CPRI_RD; end // imm16 via pc
+            S_CPRI_RD: begin // addr=R[dst]
+                dif17 = {1'b0,din} - {1'b0,operand};
+                v = (~operand[15]&din[15]&~dif17[15])|(operand[15]&~din[15]&dif17[15]);
+                fcw<=(fcw & ~(MC|MZ|MS|MV))
+                   | (dif17[16]?MC:0)|((dif17[15:0]==16'h0000)?MZ:0)|(dif17[15]?MS:0)|(v?MV:0);
+                retire<=1'b1; state<=S_FETCH0;
+            end
+
+            // ---- NEG @rd (word RMW; same formula as register-direct NEG rd). ----
+            S_NEGI_RD: begin
+                res16 = 16'h0000 - din;
+                v = (res16==16'h8000);
+                fcw<=(fcw & ~(MC|MZ|MS|MV))
+                   | ((res16!=16'h0000)?MC:0)|((res16==16'h0000)?MZ:0)|(res16[15]?MS:0)|(v?MV:0);
+                operand<=res16; state<=S_NEGI_WR;
+            end
+            S_NEGI_WR: begin retire<=1'b1; state<=S_FETCH0; end   // addr=R[dst],dout=operand,we=1
+
+            // ---- TEST @rd (read-only word, flags -ZS----; same formula as DA_TST). ----
+            S_TESTI_RD: begin // addr=R[dst]
+                fcw<=(fcw & ~(MZ|MS)) | ((din==16'h0000)?MZ:0)|(din[15]?MS:0);
+                retire<=1'b1; state<=S_FETCH0;
+            end
+
+            // ---- TSET @rd (word RMW; S = old bit15, new value unconditionally 0xFFFF). ----
+            S_TSETI_RD: begin
+                fcw<=(fcw & ~MS) | (din[15]?MS:0);
+                state<=S_TSETI_WR;
+            end
+            S_TSETI_WR: begin retire<=1'b1; state<=S_FETCH0; end  // addr=R[dst],dout=16'hFFFF,we=1
+
+            // ---- CLR @rd (plain word write, no read needed, flags ------). ----
+            S_CLRI_WR: begin retire<=1'b1; state<=S_FETCH0; end   // addr=R[dst],dout=16'h0000,we=1
+
+            // ==== BATCH 6: ALU addr[,(rs)] direct/indexed (0x40-0x4B) ===================
+            // ---- word form: FETCH computes ea (direct or indexed), RD reads @ea and
+            // stages `operand`, then joins the EXISTING S_ALU tail unchanged. ----
+            S_ALUA_FETCH:  begin ea<=din;         pc<=pc+16'd2; state<=S_ALUA_RD; end
+            S_ALUAX_FETCH: begin ea<=din+R[idxr]; pc<=pc+16'd2; state<=S_ALUA_RD; end
+            S_ALUA_RD: begin operand<=din; state<=S_ALU; end             // addr=ea
+
+            // ---- byte form: same shape, byte lane select via ea[0] (the fetched/
+            // indexed address' LSB), joins the EXISTING S_ALUB tail. ----
+            S_ALUAB_FETCH:  begin ea<=din;         pc<=pc+16'd2; state<=S_ALUAB_RD; end
+            S_ALUABX_FETCH: begin ea<=din+R[idxr]; pc<=pc+16'd2; state<=S_ALUAB_RD; end
+            S_ALUAB_RD: begin operand[7:0]<= ea[0] ? din[7:0] : din[15:8]; state<=S_ALUB; end // addr=ea&~1
+
+            // ==== BATCH 6: CPL rrd,imm32 (0x1000-0x100F) ================================
+            // Two words via `pc` (default mux, not `ea`), mirrors S_LDL_IMM_HI/LO's shape.
+            S_CPLI_HI: begin operand<=din; pc<=pc+16'd2; state<=S_CPLI_LO; end
+            S_CPLI_LO: begin
+                dif33 = {1'b0, R[{dst[3:1],1'b0}], R[{dst[3:1],1'b0}+4'd1]} - {1'b0, operand, din};
+                fcw<=(fcw & ~(MC|MZ|MS|MV)) | (dif33[32]?MC:0)|((dif33[31:0]==32'h00000000)?MZ:0)|(dif33[31]?MS:0)
+                   | (((~operand[15] & R[{dst[3:1],1'b0}][15] & ~dif33[31]) |
+                       (operand[15] & ~R[{dst[3:1],1'b0}][15] &  dif33[31])) ? MV:0);
+                pc<=pc+16'd2; retire<=1'b1; state<=S_FETCH0;
+            end
+
+            // ==== BATCH 6: byte INC/DEC addr[,(rs)],#n (0x68/0x6A) =======================
+            S_INCDAB_FETCH:  begin ea<=din;         pc<=pc+16'd2; state<=S_INCDAB_RD; end
+            S_INCDABX_FETCH: begin ea<=din+R[idxr]; pc<=pc+16'd2; state<=S_INCDAB_RD; end
+            S_INCDAB_RD: begin // addr=ea&16'hFFFE: read old word, merge new byte @ea[0]
+                i4p1 = {1'b0,mcnt} + 5'd1;
+                dbyte = ea[0] ? din[7:0] : din[15:8];
+                if (aluop==ADD) begin
+                    incb_sum = {1'b0,dbyte} + {4'd0,i4p1};
+                    v = (~dbyte[7]) & incb_sum[7]; res8 = incb_sum[7:0];
+                end else begin
+                    add8 = {1'b0,dbyte} - {4'd0,i4p1};
+                    v = dbyte[7] & ~add8[7]; res8 = add8[7:0];
+                end
+                operand <= ea[0] ? {din[15:8], res8} : {res8, din[7:0]};
+                fcw <= (fcw & ~(MZ|MS|MV)) | ((res8==8'h00)?MZ:0)|(res8[7]?MS:0)|(v?MV:0);
+                state<=S_INCDAB_WR;
+            end
+            S_INCDAB_WR: begin retire<=1'b1; state<=S_FETCH0; end  // addr=ea&16'hFFFE,dout=operand,we=1
+
+            // ==== BATCH 6: missing indexed arms for LD rd,addr(rs) / LD addr(rs),rs =====
+            // Join the EXISTING, unmodified S_DA_RD/S_DA_WR tail (Batch-4 X_FETCH shape).
+            S_LDAX_FETCH:  begin ea<=din+R[idxr]; pc<=pc+16'd2; state<=S_DA_RD; end
+            S_LDSAX_FETCH: begin ea<=din+R[idxr]; pc<=pc+16'd2; state<=S_DA_WR; end
+
+            // ==== BATCH 6: register-indirect INCB/INC/DECB/DEC @rd (0x28-0x2B) ==========
+            // EA=R[dst] directly -- no address word to fetch at all.
+            S_INCBI_RD: begin // addr=R[dst]&16'hFFFE: byte RMW, lane=R[dst][0]
+                i4p1 = {1'b0,mcnt} + 5'd1;
+                dbyte = R[dst][0] ? din[7:0] : din[15:8];
+                if (aluop==ADD) begin
+                    incb_sum = {1'b0,dbyte} + {4'd0,i4p1};
+                    v = (~dbyte[7]) & incb_sum[7]; res8 = incb_sum[7:0];
+                end else begin
+                    add8 = {1'b0,dbyte} - {4'd0,i4p1};
+                    v = dbyte[7] & ~add8[7]; res8 = add8[7:0];
+                end
+                operand <= R[dst][0] ? {din[15:8], res8} : {res8, din[7:0]};
+                fcw <= (fcw & ~(MZ|MS|MV)) | ((res8==8'h00)?MZ:0)|(res8[7]?MS:0)|(v?MV:0);
+                state<=S_INCBI_WR;
+            end
+            S_INCBI_WR: begin retire<=1'b1; state<=S_FETCH0; end  // addr=R[dst]&16'hFFFE,dout=operand,we=1
+
+            S_INCWI_RD: begin // addr=R[dst]&16'hFFFE: word RMW, mirrors S_INCDA_RD one
+                               // level more direct (EA=R[dst] instead of a fetched addr)
+                i4p1 = {1'b0,mcnt} + 5'd1;
+                if (aluop==ADD) begin
+                    incw_sum = {1'b0,din} + {12'd0,i4p1};
+                    v = (~din[15]) & incw_sum[15];
+                    operand <= incw_sum[15:0];
+                    fcw<=(fcw & ~(MZ|MS|MV)) | ((incw_sum[15:0]==16'h0000)?MZ:0)|(incw_sum[15]?MS:0)|(v?MV:0);
+                end else begin
+                    dif17 = {1'b0,din} - {12'd0,i4p1};
+                    v = din[15] & ~dif17[15];
+                    operand <= dif17[15:0];
+                    fcw<=(fcw & ~(MZ|MS|MV)) | ((dif17[15:0]==16'h0000)?MZ:0)|(dif17[15]?MS:0)|(v?MV:0);
+                end
+                state<=S_INCWI_WR;
+            end
+            S_INCWI_WR: begin retire<=1'b1; state<=S_FETCH0; end  // addr=R[dst]&16'hFFFE,dout=operand,we=1
 
             S_ILLEGAL: ;
             default: state<=S_FETCH0;
