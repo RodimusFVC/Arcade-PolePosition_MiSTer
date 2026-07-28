@@ -10,9 +10,6 @@ set_global_assignment -name VHDL_FILE rtl/sp_palette_lsb.vhd
 set_global_assignment -name VHDL_FILE rtl/sound_seq.vhd
 set_global_assignment -name VHDL_FILE rtl/sound_samples.vhd
 set_global_assignment -name VHDL_FILE rtl/sound_lpf.vhd
-set_global_assignment -name VHDL_FILE rtl/red.vhd
-set_global_assignment -name VHDL_FILE rtl/green.vhd
-set_global_assignment -name VHDL_FILE rtl/blue.vhd
 set_global_assignment -name VHDL_FILE rtl/bg_palette_msb.vhd
 set_global_assignment -name VHDL_FILE rtl/bg_palette_lsb.vhd
 set_global_assignment -name VHDL_FILE rtl/sound_machine.vhd
@@ -30,7 +27,16 @@ set_global_assignment -name SYSTEMVERILOG_FILE rtl/cpu/mb88_sv/mb88.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/pp_tile_decode.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/pp_tile_layer.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/pp_palette_alpha.sv
-set_global_assignment -name SYSTEMVERILOG_FILE rtl/pp_alpha_bringup.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/pp_palette_view.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/pp_tile_composite.sv
+# Full video pipeline (road + sprites + 4-layer compositor). Generators co-sim-verified
+# vs MAME draw_road / zoom_sprite (verilator/road, verilator/sprite). pp_video_composite
+# supersedes pp_tile_composite (instantiated by poleposition.vhd).
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/pp_palette_road.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/pp_palette_sprite.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/pp_road_gen.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/pp_sprite_gen.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/pp_video_composite.sv
 # STEP-3 CPU subsystem: Z80 maincpu + 2x Z8002 game CPUs + shared VRAM (replaces
 # the removed Xevious 3-Z80 muxed-bus section). Instantiated by poleposition.vhd.
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/cpu/z8002/z8002.sv
@@ -40,15 +46,10 @@ set_global_assignment -name SYSTEMVERILOG_FILE rtl/PolePosition_CPU.sv
 # above, reused unmodified). Instantiated by poleposition.vhd via VHDL `component`
 # declarations (the direct `entity work.X` bind fails with Error 10481 per the
 # mb88 note above — component + instantiation is the proven Q17 VHDL<-SV path).
-set_global_assignment -name SYSTEMVERILOG_FILE rtl/namco_06xx.sv
-set_global_assignment -name SYSTEMVERILOG_FILE rtl/namco_51xx.sv
-set_global_assignment -name SYSTEMVERILOG_FILE rtl/namco_53xx.sv
-# Namco WSG (8-voice, Pole Position register layout) — replaces the orphaned
-# Xevious sound_machine.vhd/sound_seq.vhd/sound_samples.vhd above (3-voice,
-# different register layout & waveform ROM; those 3 files are left in this qip
-# unused/uninstantiated since the STEP-3 GUT removed their instantiation).
-# See namco_wsg8.sv header for MAME ground truth (namco.cpp polepos_sound_r/w).
-set_global_assignment -name SYSTEMVERILOG_FILE rtl/namco_wsg8.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/namco/namco_06xx.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/namco/namco_51xx.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/namco/namco_53xx.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/namco/namco_wsg8.sv
 # ADC0804 (accelerator/brake pedal A/D converter, Z80 I/O port 0x00). Faithful
 # port of MAME's adc0804.cpp device model. Instantiated by poleposition.vhd via
 # a VHDL `component` declaration (same proven Q17 VHDL<-SV path as the other

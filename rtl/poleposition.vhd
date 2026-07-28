@@ -37,9 +37,24 @@ port(
  gfx_addr       : out std_logic_vector(11 downto 0);
  gfx_data       : in  std_logic_vector(7 downto 0);
 
- -- alpha palette PROM load (ioctl index 2, 0x000-0x3FF = R/G/B/alpha tables)
+ -- INCR-view (2026-07-18): tiles (view/bg) gfx ROM interface. Sibling of the
+ -- chars ROM; lives in the top (ioctl index 1 @0x1000); view renderer drives addr.
+ view_gfx_addr  : out std_logic_vector(11 downto 0);
+ view_gfx_data  : in  std_logic_vector(7 downto 0);
+
+ -- INCR-video (2026-07-18): road / scalelut / sprite gfx ROMs (all in the top,
+ -- ioctl idx1: road @0x14000, scalelut @0x19000, sprite small@0x2000 + big@0x6000
+ -- -> combined sprite ROM @(ioctl_addr-0x2000)). The road/sprite generators drive addr.
+ road_rom_addr  : out std_logic_vector(14 downto 0);
+ road_rom_data  : in  std_logic_vector(7 downto 0);
+ scalelut_addr  : out std_logic_vector(11 downto 0);
+ scalelut_data  : in  std_logic_vector(7 downto 0);
+ sprgfx_addr    : out std_logic_vector(16 downto 0);
+ sprgfx_data    : in  std_logic_vector(7 downto 0);
+
+ -- palette PROM load (ioctl index 2, 0x000-0xFFF = R/G/B/alpha/view/vpos-mod/road/sprite)
  prom_wr        : in  std_logic;
- prom_addr      : in  std_logic_vector(9 downto 0);
+ prom_addr      : in  std_logic_vector(11 downto 0);
  prom_data      : in  std_logic_vector(7 downto 0);
 
  -- Namco WSG waveform PROM load (ioctl index 2, region-relative 0x1040-0x113F;
@@ -139,6 +154,16 @@ architecture struct of poleposition is
  -- alpha scanout (renderer <-> PolePosition_CPU)
  signal bru_scan_addr   : std_logic_vector(10 downto 0);
  signal alpha_scan_dout : std_logic_vector(15 downto 0);
+ -- view/bg scanout + hscroll (renderer <-> PolePosition_CPU), 2026-07-18
+ signal view_scan_addr_w : std_logic_vector(10 downto 0);
+ signal view_scan_dout_w : std_logic_vector(15 downto 0);
+ signal hscroll_w        : std_logic_vector(15 downto 0);
+ -- road/sprite scanout + road vscroll (renderer <-> PolePosition_CPU), 2026-07-18
+ signal road_scan_addr_w   : std_logic_vector(9 downto 0);
+ signal road_scan_dout_w   : std_logic_vector(15 downto 0);
+ signal sprite_scan_addr_w : std_logic_vector(10 downto 0);
+ signal sprite_scan_dout_w : std_logic_vector(15 downto 0);
+ signal road_vscroll_w     : std_logic_vector(15 downto 0);
 
  -- CPU ROM-load derives from the index-0 dn_ stream
  signal cpu_rom_wr    : std_logic;
@@ -297,22 +322,38 @@ architecture struct of poleposition is
  );
  end component;
 
- component pp_alpha_bringup
+ component pp_video_composite
  port(
-   clk      : in  std_logic;
-   ce       : in  std_logic;
-   hpos     : in  std_logic_vector(8 downto 0);
-   vpos     : in  std_logic_vector(8 downto 0);
-   gfx_addr : out std_logic_vector(11 downto 0);
-   gfx_data : in  std_logic_vector(7 downto 0);
-   scan_addr: out std_logic_vector(10 downto 0);
-   scan_dout: in  std_logic_vector(15 downto 0);
-   prom_wr  : in  std_logic;
-   prom_addr: in  std_logic_vector(9 downto 0);
-   prom_data: in  std_logic_vector(7 downto 0);
-   r        : out std_logic_vector(3 downto 0);
-   g        : out std_logic_vector(3 downto 0);
-   b        : out std_logic_vector(3 downto 0)
+   clk             : in  std_logic;
+   ce              : in  std_logic;
+   hpos            : in  std_logic_vector(8 downto 0);
+   vpos            : in  std_logic_vector(8 downto 0);
+   alpha_scan_addr : out std_logic_vector(10 downto 0);
+   alpha_scan_dout : in  std_logic_vector(15 downto 0);
+   alpha_gfx_addr  : out std_logic_vector(11 downto 0);
+   alpha_gfx_data  : in  std_logic_vector(7 downto 0);
+   view_scan_addr  : out std_logic_vector(10 downto 0);
+   view_scan_dout  : in  std_logic_vector(15 downto 0);
+   view_gfx_addr   : out std_logic_vector(11 downto 0);
+   view_gfx_data   : in  std_logic_vector(7 downto 0);
+   view_hscroll    : in  std_logic_vector(15 downto 0);
+   road_scan_addr  : out std_logic_vector(9 downto 0);
+   road_scan_dout  : in  std_logic_vector(15 downto 0);
+   road_rom_addr   : out std_logic_vector(14 downto 0);
+   road_rom_data   : in  std_logic_vector(7 downto 0);
+   road_vscroll    : in  std_logic_vector(15 downto 0);
+   sprite_scan_addr: out std_logic_vector(10 downto 0);
+   sprite_scan_dout: in  std_logic_vector(15 downto 0);
+   scalelut_addr   : out std_logic_vector(11 downto 0);
+   scalelut_data   : in  std_logic_vector(7 downto 0);
+   sprgfx_addr     : out std_logic_vector(16 downto 0);
+   sprgfx_data     : in  std_logic_vector(7 downto 0);
+   prom_wr         : in  std_logic;
+   prom_addr       : in  std_logic_vector(11 downto 0);
+   prom_data       : in  std_logic_vector(7 downto 0);
+   r               : out std_logic_vector(3 downto 0);
+   g               : out std_logic_vector(3 downto 0);
+   b               : out std_logic_vector(3 downto 0)
  );
  end component;
 
@@ -454,24 +495,43 @@ port map(
 	v_offset => v_offset
 );
 
--- alpha (text) renderer: reads the REAL scan_alpha buffer from PolePosition_CPU;
--- gfx from the top-side chars ROM; raw {color,pixel,bank}->RGB (palette = incr 1b).
-u_alpha_bringup : pp_alpha_bringup
+-- FULL video compositor: view/bg (vpos<128) OR road (vpos>=128) -> sprites ->
+-- alpha, per MAME screen_update. Reads the REAL scan_alpha/view/road/sprite
+-- buffers from PolePosition_CPU; gfx from the top-side chars/tiles/road/scalelut/
+-- sprite ROMs; palettes pp_palette_alpha/view/road/sprite. Both generators are
+-- co-sim-verified (verilator/road, verilator/sprite).
+u_video_composite : pp_video_composite
 port map(
-	clk      => clock_18,
-	ce       => ena_vidgen,
-	hpos     => hcnt,
-	vpos     => vcnt,
-	gfx_addr => gfx_addr,
-	gfx_data => gfx_data,
-	scan_addr=> bru_scan_addr,
-	scan_dout=> alpha_scan_dout,
-	prom_wr  => prom_wr,
-	prom_addr=> prom_addr,
-	prom_data=> prom_data,
-	r        => bru_r,
-	g        => bru_g,
-	b        => bru_b
+	clk              => clock_18,
+	ce               => ena_vidgen,
+	hpos             => hcnt,
+	vpos             => vcnt,
+	alpha_scan_addr  => bru_scan_addr,
+	alpha_scan_dout  => alpha_scan_dout,
+	alpha_gfx_addr   => gfx_addr,
+	alpha_gfx_data   => gfx_data,
+	view_scan_addr   => view_scan_addr_w,
+	view_scan_dout   => view_scan_dout_w,
+	view_gfx_addr    => view_gfx_addr,
+	view_gfx_data    => view_gfx_data,
+	view_hscroll     => hscroll_w,
+	road_scan_addr   => road_scan_addr_w,
+	road_scan_dout   => road_scan_dout_w,
+	road_rom_addr    => road_rom_addr,
+	road_rom_data    => road_rom_data,
+	road_vscroll     => road_vscroll_w,
+	sprite_scan_addr => sprite_scan_addr_w,
+	sprite_scan_dout => sprite_scan_dout_w,
+	scalelut_addr    => scalelut_addr,
+	scalelut_data    => scalelut_data,
+	sprgfx_addr      => sprgfx_addr,
+	sprgfx_data      => sprgfx_data,
+	prom_wr          => prom_wr,
+	prom_addr        => prom_addr,
+	prom_data        => prom_data,
+	r                => bru_r,
+	g                => bru_g,
+	b                => bru_b
 );
 
 -- CPU subsystem: Z80 maincpu + 2x Z8002 game CPUs + shared VRAM. Its Z8002s
@@ -521,16 +581,16 @@ port map(
 	ioctl_data       => dn_data,
 	rom_wr           => cpu_rom_wr,
 	ioctl_wr_idx0    => dn_wr,
-	scan_sprite_addr => zero11,
-	scan_sprite_dout => open,
-	scan_road_addr   => zero10,
-	scan_road_dout   => open,
+	scan_sprite_addr => sprite_scan_addr_w,
+	scan_sprite_dout => sprite_scan_dout_w,
+	scan_road_addr   => road_scan_addr_w,
+	scan_road_dout   => road_scan_dout_w,
 	scan_alpha_addr  => bru_scan_addr(9 downto 0),
 	scan_alpha_dout  => alpha_scan_dout,
-	scan_view_addr   => zero11,
-	scan_view_dout   => open,
-	hscroll          => open,
-	vscroll          => open
+	scan_view_addr   => view_scan_addr_w,
+	scan_view_dout   => view_scan_dout_w,
+	hscroll          => hscroll_w,
+	vscroll          => road_vscroll_w
 );
 
 -- watchdog (rtl/pp_watchdog.sv). vpos = vcnt, the SAME source fed to u_pp_cpu's
@@ -563,23 +623,27 @@ port map(
 	intr_n   => adc_intr_n_w
 );
 
--- Namco WSG (8-voice, rtl/namco_wsg8.sv). Z80-side register bus from u_pp_cpu
--- above; waveform PROM loaded from the top (ioctl index 2, see wsg_prom_*
--- ports); audio replaces the removed `audio <= (others=>'0')` tie-off.
-u_wsg : namco_wsg8
-port map(
-	clk       => clock_18,
-	reset     => reset,
-	sound_en  => sound_en_w,
-	reg_addr  => wsg_addr_w,
-	reg_din   => wsg_dout_w,
-	reg_wr    => wsg_wr_w,
-	reg_dout  => wsg_din_w,
-	wave_wr   => wsg_prom_wr,
-	wave_addr => wsg_prom_addr,
-	wave_data => wsg_prom_data,
-	audio     => audio
-);
+-- STARTUP-STRIP-2026-07-27: WSG not needed to reach/observe the self-test;
+-- commented out to cut Quartus compile time (namco_wsg8 was flagged heavy,
+-- ~2,634 ALMs for an 8-voice WSG per the 2026-07-19 LE-overflow note) while
+-- chasing the boot hang. Uncomment + restore the `audio <= (others=>'0')`
+-- removal comment above to bring sound back.
+-- u_wsg : namco_wsg8
+-- port map(
+-- 	clk       => clock_18,
+-- 	reset     => reset,
+-- 	sound_en  => sound_en_w,
+-- 	reg_addr  => wsg_addr_w,
+-- 	reg_din   => wsg_dout_w,
+-- 	reg_wr    => wsg_wr_w,
+-- 	reg_dout  => wsg_din_w,
+-- 	wave_wr   => wsg_prom_wr,
+-- 	wave_addr => wsg_prom_addr,
+-- 	wave_data => wsg_prom_data,
+-- 	audio     => audio
+-- );
+audio     <= (others => '0');
+wsg_din_w <= (others => '0');
 
 -- ---- Namco 5xxx MCU clock enable (see signal declaration comment) ----------
 process (clock_18)

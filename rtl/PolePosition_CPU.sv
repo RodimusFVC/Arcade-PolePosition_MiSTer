@@ -268,7 +268,19 @@ module PolePosition_CPU
     //------------------------------------------------------------------------
     assign vram_addr    = cpu_A[12:0];
     assign vram_dout    = cpu_Dout;
-    assign vram_wr      = cs_vram & wr_s;
+    // VRAM-WR-RACE-FIX-2026-07-27: was `cs_vram & wr_s` (wr_s = ~n_wr & cen, a
+    // single fabric-clock pulse). PolePosition_subcpu.sv's Port-A arbiter only
+    // grants the Z80 5 of 16 `div` slots (own_z80 = div<=4) and its own comment
+    // assumes "writes are idempotent across the owner's whole slot (bus held
+    // stable)" -- false for a 1-clk pulse racing an independently-phased
+    // counter (div resets with `reset`; cen_cnt upstream never does). Co-sim
+    // (verilator/pp_maincpu) measured EVERY Z80 VRAM write landing at div=5,
+    // outside own_z80, 40/40 samples -- writes were silently dropped 100% of
+    // the time. Hold vram_wr for the whole ~n_wr-active window (~2 T-states,
+    // longer than one 16-cycle div period) so it's guaranteed to overlap an
+    // own_z80 slot regardless of phase. wr_s itself is untouched (still used
+    // for the single-pulse-safe local registers: latch, nvram, sndram, etc).
+    assign vram_wr      = cs_vram & ~n_wr;
     assign vram_rd      = cs_vram & rd_s;
 
     assign n06_dout     = cpu_Dout;

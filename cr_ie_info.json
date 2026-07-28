@@ -1,0 +1,22 @@
+{
+	"system" : {
+		"platform" : "linux64",
+		"os_name" : "\\S{PRETTY_NAME} \\r",
+		"os_version" : ""
+	},
+	"error" : {
+		"executable" : "quartus_map",
+		"comment" : "not_applicable",
+		"error_message" : "iname != NULL",
+		"source_file" : "/quartus/db/cdb_sgate/cdb_sgate_removed_registers_db.cpp",
+		"line" : "164",
+		"stack_trace" : "\t0x7f63fb34d114: db_cdb_sgate + 0x34d114 (_ZN30CDB_SGATE_REMOVED_REGISTERS_DB10merge_withEPS_ + 0x8a4)\n\t0x7f642818dfb5: synth_sutil + 0x18dfb5 (_Z26sutil_parallel_deserializeP10CMP_FACADEPKciP19CDB_SGATE_HIERARCHYRSt6vectorIP17CDB_SGATE_NETLISTSaIS7_EEi + 0x1b5)\n\t0x7f642d978b14: synth_opt + 0x178b14 (_ZN10RTL_SCRIPT19call_named_functionEPKcS1_S1_iii + 0xbf4)\n\t0x7f642d97b2c2: synth_opt + 0x17b2c2 (_ZN10RTL_SCRIPT14process_scriptEP17CDB_SGATE_NETLISTP19CDB_SGATE_HIERARCHYP20BASEX_ELABORATE_INFOP10CMP_FACADE15RTL_SCRIPT_ENUMPA3_PKciP15RTL_SCRIPT_STEPSE_ + 0x7c2)\n\t0x7f642d991d1d: synth_opt + 0x191d1d (_Z28opt_process_netlist_scriptedP10CMP_FACADEP19CDB_SGATE_HIERARCHYP20BASEX_ELABORATE_INFO15RTL_SCRIPT_ENUMb + 0x39d)\n\t0x7f642d842a84: synth_opt + 0x42a84 (_ZN8RTL_ROOT21process_sgate_netlistEP10CMP_FACADEP19CDB_SGATE_HIERARCHYP20BASEX_ELABORATE_INFO13RTL_PASS_ENUM + 0x56a)\n\t0x7f6433d7e875: synth_sgn + 0x17e875 (_ZN13SGN_SYNTHESIS20high_level_synthesisEv + 0x145)\n\t0x7f6433d7f762: synth_sgn + 0x17f762 (_ZN13SGN_SYNTHESIS21process_current_stageEv + 0x1c2)\n\t0x7f6433d8fdf2: synth_sgn + 0x18fdf2 (_ZN13SGN_EXTRACTOR20synthesize_partitionEm + 0x432)\n\t0x7f6433d909ec: synth_sgn + 0x1909ec (_ZN13SGN_EXTRACTOR9synthesisEv + 0x1dc)\n\t0x7f6433da43d8: synth_sgn + 0x1a43d8 (_ZN13SGN_EXTRACTOR29synthesis_and_post_processingEv + 0x1a8)\n\t0x7f6433da4da6: synth_sgn + 0x1a4da6 (_Z12sgn_qic_fullP10CMP_FACADERSt6vectorISsSaISsEERS1_IdSaIdEE + 0x276)\n\t   0x41c3b9: quartus_map + 0x1c3b9 (_Z16qsyn_execute_sgnP10CMP_FACADERSt6vectorISsSaISsEERKSsP14THR_NAMED_PIPES8_ + 0x159)\n\t   0x437d61: quartus_map + 0x37d61 (_ZN14QSYN_FRAMEWORK12execute_coreEP14THR_NAMED_PIPES1_ + 0x231)\n\t   0x43bcec: quartus_map + 0x3bcec (_ZN14QSYN_FRAMEWORK7executeEv + 0xc4c)\n\t0x7f641601c75b: comp_qexe + 0x1c75b (_Z18qexe_standard_mainP14QEXE_FRAMEWORKPPK22QEXE_OPTION_DEFINITIONiPPKc + 0x888)\n\t   0x43025c: quartus_map + 0x3025c (_Z9qsyn_mainiPPKc + 0x13c)\n\t0x7f63ea240720: ccl_msg + 0x40720 (_Z15msg_main_threadPv + 0x10)\n\t0x7f63e540602c: ccl_thr + 0x602c (thr_final_wrapper + 0xc)\n\t0x7f63ea2407df: ccl_msg + 0x407df (_Z18msg_thread_wrapperPFPvS_ES_ + 0x62)\n\t0x7f63e600a559: ccl_mem + 0xa559 (_Z18mem_thread_wrapperPFPvS_ES_ + 0x99)\n\t0x7f63e5c08f92: ccl_err + 0x8f92 (_Z18err_thread_wrapperPFPvS_ES_ + 0x27)\n\t0x7f63e54063f2: ccl_thr + 0x63f2 (thr_thread_wrapper + 0x15)\n\t0x7f63ea2427e2: ccl_msg + 0x427e2 (_Z12msg_exe_mainiPPKcPFiiS1_E + 0xa3)\n\t0x7f63df427741: c.so.6 + 0x27741\n\t0x7f63df427879: c.so.6 + 0x27879 (__libc_start_main + 0x89)\n\t   0x415545: quartus_map + 0x15545\n",
+		"subsystem" : "CDB_SGATE"
+	},
+	"quartus" : {
+		"quartus_bits" : "64",
+		"version" : "17.0.2",
+		"build" : "602",
+		"edition" : "Lite Edition"
+	}
+}

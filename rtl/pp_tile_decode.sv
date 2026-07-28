@@ -69,15 +69,22 @@ module pp_tile_decode
     assign gfx_addr_r = { code8, 1'b1, row };
 
     // ---- 2bpp serialize ------------------------------------------------------
-    //   Each byte holds 4 pixels, nibble-planar:
-    //     pixel(x) = { byte[(x&3)+4], byte[x&3] }   (plane1 = MSB, plane0 = LSB)
+    //   Derived directly from MAME's charlayout_2bpp (Useful Stuff/mame/polepos.cpp:820-829):
+    //     planeoffset{0,4}, xoffset{0,1,2,3, 8*8+0..3}, MSB-first bit addressing
+    //     (bit-address B -> byte B/8, bit (7-B%8)). Working it through for one
+    //     4px half-byte: plane0 (offset 0) lands on bits 7,6,5,4 for x=0,1,2,3
+    //     and plane1 (offset 4) lands on bits 3,2,1,0 for x=0,1,2,3 -- i.e. the
+    //     HIGH nibble is plane0 (not the low nibble), and x INCREASES as the
+    //     bit position DECREASES within each nibble (x=0 at the nibble's top
+    //     bit). Getting either of these backwards was silently plausible (both
+    //     compile and "do something") -- this is why it needed re-deriving from
+    //     the source instead of re-guessing: FIX-2026-07-28 for a real, visually
+    //     confirmed horizontal mirror (was also a latent plane/color swap).
     //   x<4 -> left byte, x>=4 -> right byte  (col[2] selects the half).
     wire [7:0] sel_byte = col[2] ? gfx_byte_r : gfx_byte_l;
-    // Name the nibble bit indices as plain wires. A concatenation used *inside*
-    // a bit-select (`sel_byte[{1'b1,col[1:0]}]`) mis-evaluated for indices 6/7
-    // under Verilator — same hazard as expression bit-selects; name it first.
-    wire [2:0] bit_p0 = {1'b0, col[1:0]};   // plane 0 -> byte bits 0..3
-    wire [2:0] bit_p1 = {1'b1, col[1:0]};   // plane 1 -> byte bits 4..7
+    wire [1:0] x_in_half = col[1:0];
+    wire [2:0] bit_p0 = {1'b1, ~x_in_half};   // plane0 -> bits 7,6,5,4 as x=0,1,2,3
+    wire [2:0] bit_p1 = {1'b0, ~x_in_half};   // plane1 -> bits 3,2,1,0 as x=0,1,2,3
     assign pixel = { sel_byte[bit_p1], sel_byte[bit_p0] };
 
 endmodule

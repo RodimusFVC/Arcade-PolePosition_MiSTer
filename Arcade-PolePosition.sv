@@ -460,12 +460,63 @@ always @(posedge clk_sys) begin
 	chars_gfx_data <= chars_rom[chars_gfx_addr];
 end
 
-// Alpha palette PROMs — ioctl INDEX 2, offset 0x000-0x3FF (R@0x000, G@0x100,
-// B@0x200, alpha@0x300; 4x256 bytes). pp_palette_alpha decodes prom_addr[9:8]=table,
-// [7:0]=entry. Region-relative addr (ioctl_addr resets to 0 at each index).
-wire       pp_prom_wr   = ioctl_wr & (ioctl_index == 8'd2) & (ioctl_addr < 25'h400);
-wire [9:0] pp_prom_addr = ioctl_addr[9:0];
-wire [7:0] pp_prom_data = ioctl_dout;
+// TILES (view/bg) gfx ROM — ioctl INDEX 1, offset 0x1000-0x1FFF (sibling of the
+// chars ROM above; idx1 = chars@0x000 then tiles@0x1000). ioctl_addr[11:0] maps
+// 0x1000->0 within the region. Sync 1-clk read feeds the view renderer. 2026-07-18.
+wire [11:0] tiles_gfx_addr;
+reg  [7:0]  tiles_gfx_data;
+reg  [7:0]  tiles_rom [0:4095];
+wire        tiles_wr = ioctl_wr & (ioctl_index == 8'd1) & (ioctl_addr >= 25'h1000) & (ioctl_addr < 25'h2000);
+always @(posedge clk_sys) begin
+	if (tiles_wr) tiles_rom[ioctl_addr[11:0]] <= ioctl_dout;
+	tiles_gfx_data <= tiles_rom[tiles_gfx_addr];
+end
+
+// STARTUP-STRIP-2026-07-27: road/scalelut/sprite gfx ROM storage commented
+// out — pp_road_gen/pp_sprite_gen are disabled inside pp_video_composite.sv
+// (see its STARTUP-STRIP-2026-07-27 tags) while chasing the boot hang, so
+// these arrays (105KB combined, sprite_rom alone is 80KB) are dead weight
+// slowing Quartus down for no reason right now. Uncomment together with the
+// pp_video_composite.sv road/sprite blocks to restore.
+// wire [14:0] road_rom_addr;
+// reg  [7:0]  road_rom_data;
+// reg  [7:0]  road_rom [0:20479];    // 0x5000
+// wire        road_wr = ioctl_wr & (ioctl_index == 8'd1) & (ioctl_addr >= 25'h14000) & (ioctl_addr < 25'h19000);
+// always @(posedge clk_sys) begin
+// 	if (road_wr) road_rom[ioctl_addr - 25'h14000] <= ioctl_dout;
+// 	road_rom_data <= road_rom[road_rom_addr];
+// end
+//
+// wire [11:0] scalelut_addr;
+// reg  [7:0]  scalelut_data;
+// reg  [7:0]  scalelut_rom [0:4095];
+// wire        scalelut_wr = ioctl_wr & (ioctl_index == 8'd1) & (ioctl_addr >= 25'h19000) & (ioctl_addr < 25'h1A000);
+// always @(posedge clk_sys) begin
+// 	if (scalelut_wr) scalelut_rom[ioctl_addr[11:0]] <= ioctl_dout;
+// 	scalelut_data <= scalelut_rom[scalelut_addr];
+// end
+//
+// wire [16:0] sprgfx_addr;
+// reg  [7:0]  sprgfx_data;
+// reg  [7:0]  sprite_rom [0:81919];  // 0x14000
+// wire        sprite_wr = ioctl_wr & (ioctl_index == 8'd1) & (ioctl_addr >= 25'h2000) & (ioctl_addr < 25'h14000);
+// always @(posedge clk_sys) begin
+// 	if (sprite_wr) sprite_rom[ioctl_addr - 25'h2000] <= ioctl_dout;
+// 	sprgfx_data <= sprite_rom[sprgfx_addr];
+// end
+wire [14:0] road_rom_addr;
+wire [7:0]  road_rom_data = 8'h00;
+wire [11:0] scalelut_addr;
+wire [7:0]  scalelut_data = 8'h00;
+wire [16:0] sprgfx_addr;
+wire [7:0]  sprgfx_data = 8'h00;
+
+// Palette PROMs — ioctl INDEX 2, offset 0x000-0xFFF (R@0x000 G@0x100 B@0x200
+// alpha@0x300 view@0x400 vpos-mod@0x500/600/700 road@0x800 sprite@0xC00). Each
+// palette/generator decodes prom_addr[11:8] or [11:10]. Region-relative addr.
+wire        pp_prom_wr   = ioctl_wr & (ioctl_index == 8'd2) & (ioctl_addr < 25'h1000);
+wire [11:0] pp_prom_addr = ioctl_addr[11:0];
+wire [7:0]  pp_prom_data = ioctl_dout;
 
 // Namco WSG waveform PROM — ioctl INDEX 2, region-relative 0x1040-0x113F (256
 // bytes, right after the 0x1040-byte "proms" block; MAME polepos "namco"
@@ -527,6 +578,16 @@ poleposition poleposition
 
 	.gfx_addr(chars_gfx_addr),
 	.gfx_data(chars_gfx_data),
+
+	.view_gfx_addr(tiles_gfx_addr),
+	.view_gfx_data(tiles_gfx_data),
+
+	.road_rom_addr(road_rom_addr),
+	.road_rom_data(road_rom_data),
+	.scalelut_addr(scalelut_addr),
+	.scalelut_data(scalelut_data),
+	.sprgfx_addr(sprgfx_addr),
+	.sprgfx_data(sprgfx_data),
 
 	.prom_wr(pp_prom_wr),
 	.prom_addr(pp_prom_addr),

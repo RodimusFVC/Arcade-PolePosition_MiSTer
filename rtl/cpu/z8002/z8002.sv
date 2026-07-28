@@ -246,13 +246,27 @@ module z8002
     // FCW flag masks
     localparam [15:0] MC=16'h0080, MZ=16'h0040, MS=16'h0020, MV=16'h0010,
                       MDA=16'h0008, MH=16'h0004;
-    localparam integer FC=7, FZ=6, FS=5, FV=4, FH=2;
+    localparam integer FC=7, FZ=6, FS=5, FV=4, FH=2, FDA=3;
     // FCW interrupt-enable masks (MAME z8000cpu.h): F_NVIE=bit11 F_VIE=bit12 F_S_N=bit14
     localparam [15:0] F_NVIE=16'h0800, F_VIE=16'h1000, F_S_N=16'h4000;
     // ALU ops
     localparam [2:0] LD=0, ADD=1, SUB=2, AND=3, OR=4, XOR=5, CP=6;
 
     reg [15:0] R [0:15];
+    // ==== BATCH 8: DAB (0xB0) result ROM, ported verbatim from MAME's
+    // Useful Stuff/mame/z8000/z8000dab.h (2048 x 9-bit, mechanically extracted -- NOT
+    // hand-transcribed -- and spot-checked against the source header: idx[8..0]=0
+    // ->9'h008, idx=9->9'h009, idx=10->9'h010 (BCD carry after 9); idx=1023(add-section
+    // end)->9'h165; idx=1024(sub-section start)->9'h000; idx=2047(sub-section
+    // end)->9'h199, all matching the header exactly). Index = {DA,H,C,byte-value}
+    // (bit10=DA/subtract flag, bit9=H, bit8=C, bits7:0=RB(dst)); result bits7:0=
+    // decimal-adjusted byte, bit8=carry-out. ====
+    reg [8:0] dab_rom [0:2047];
+    `include "z8002_dab_rom.svh"
+    // BATCH 9 2026-07-28: cycle-accuracy padding counters (see the S_FETCH0 gate below).
+    // Max cycle count among implemented opcodes is 744 (DIVL); 16 bits is generous headroom.
+    reg [15:0] target_cycles, cyc_count;
+    `include "z8002_cycle_lookup.svh"
     reg [15:0] pc, fcw, ir, operand, ea;
     reg [15:0] psap;           // PSA pointer (control reg, LDCTL psapoff) - reset 0
     reg        nvi_pending;    // level-latched from nvi_n, cleared on NVI accept
@@ -269,6 +283,10 @@ module z8002
     // BIT/BITB/RES/SET @Rd,#imm4 family.
     reg [15:0] operand2, bmask;
     reg        bitop_set;
+    // BATCH 7 2026-07-27: LDA prd,addr[(rs)] (0x76) mode select -- `addr` alone
+    // (NIB2==0) vs `addr(rs)` (NIB2!=0, adds R[src]). Can't use src==0 as a
+    // sentinel since R0 is a real, valid source register.
+    reg        lda76_has_src;
     // BATCH 3: RQ (quad, 4x16-bit) base register index for MULTL/DIVL = {dst[3:2],2'b00}
     // (MAME `#define RQ(n) m_regs.Q[(n)>>2]` truncates the low TWO bits of n, one level
     // wider than RL's bit0 truncation). operand/operand2 double as the hi/lo staging
@@ -290,7 +308,7 @@ module z8002
     reg [3:0]  idxr;
 
     // direct/indirect memory access op (for the EA states)
-    localparam [2:0] DA_LDR=0, DA_STR=1, DA_STI=2, DA_CLR=3, DA_TST=4;
+    localparam [2:0] DA_LDR=0, DA_STR=1, DA_STI=2, DA_CLR=3, DA_TST=4, DA_CPI=5;
 
     localparam [5:0] S_RST_FCW=0, S_RST_PC=1, S_FETCH0=2, S_IMM=3, S_MEMRD=4,
                      S_ALU=5, S_MEMWR=6, S_SHIFT=7, S_JP=8, S_ADDB_RD=9, S_ILLEGAL=10,
@@ -444,6 +462,62 @@ module z8002
                      // 0x28-0x2B INCB/INC/DECB/DEC @rd: EA=R[dst] directly (no address
                      // word to fetch at all) -- mirrors S_INCDA_RD/WR one level more direct.
                      S_INCBI_RD=155, S_INCBI_WR=156, S_INCWI_RD=157, S_INCWI_WR=158;
+    // ---- AREA FIX 2026-07-19: sequential divider states ----
+    // DIV/DIVL previously used combinational `/` and `%`. Quartus inferred FOUR
+    // lpm_divide instances per CPU (Div0/Mod0 32-bit, Div1/Mod1 64-bit) because
+    // `/` and `%` on identical operands are NOT common-subexpression-eliminated:
+    //   Div0 537 + Mod0 552 + Div1 2107 + Mod1 2060 = 5256 ALMs *per z8002*,
+    //   x2 instances = ~10.5k ALMs = 25% of the 5CSEBA6U23I7. Fit hit 95%.
+    // Replaced by ONE shared restoring (shift-subtract) divider producing quotient
+    // AND remainder from a single datapath, shared between DIV and DIVL. 64 cycles.
+    // This is also closer to real Z8002 timing (DIV 92-107 cyc, DIVL 744+ cyc) than
+    // the previous single-cycle form. Bus stays idle in these states: not listed in
+    // the `addr` mux (defaults to `pc`) and not in `we` -- read-only, no side effects.
+    localparam [7:0]
+                     S_DIV_BUSY=159, S_DIV_FIN=160, S_DIVL_FIN=161;
+    // ---- BATCH 7 2026-07-27: SLA/SRA word, SLAL/SRAL long, SLLL/SRLL long ----
+    // (0xB3 NIB3={9,D,5}). Word SLL/SRL (NIB3=1) already existed as S_SHIFT;
+    // these are its arithmetic and 32-bit siblings, needed once real code past
+    // the self-test/06xx-51xx handshake became reachable for the first time
+    // (VRAM-WR-RACE-FIX-2026-07-27) -- SRAL specifically hit as S_ILLEGAL at
+    // pp_sub1.asm:83 (0x00CE `sral rr2,#4`). MAME z8000ops.hxx SRAW/SRAL/SRLW/
+    // SRLL bodies verified: right-arithmetic-shift NEVER sets V despite the
+    // "flags CZSV--" doc-comment (CLR_CZSV then no `if(...)SET_V` at all) --
+    // matched exactly below, not assumed from the mnemonic.
+    localparam [7:0]
+                     S_SHIFTA=162, S_SHIFTAL=163, S_SHIFTL=164;
+    // ---- BATCH 7 2026-07-27: LDA prd,addr[(rs)] (0x76) -- the opcode actually hit as
+    // S_ILLEGAL (pp_sub2.asm:635, `lda pr11,%8900`, encoding 0x760B). Scope note: only
+    // 0x76 is implemented this batch (both its NIB2==0/!=0 sub-forms) -- its siblings
+    // 0x70-0x75/0x77 (register+register indexed ldb/ld/ldl/lda, a genuinely different
+    // addressing mode) are NOT yet confirmed needed by any reachable code and are left
+    // as documented gaps, matching this project's "close reachable gaps only" scope
+    // (see 2026-07-17b below). Add them if/when co-sim hits one. ----
+    localparam [7:0]
+                     S_LDA76_FETCH=165, S_LDA76_GO=166;
+    // ---- BATCH 8 2026-07-27: remaining ISA gaps found via full-trace audit against the
+    // user's MAME boot-to-attract traces (pp_sub1_fullboot.trace/pp_sub2_fullboot.trace) --
+    // every opcode word ACTUALLY EXECUTED by either sub, cross-referenced against z8002.sv's
+    // real dispatch conditions (including range and exact-match forms the naive per-line
+    // audit missed on the first pass) to get the true remaining gap list mechanically, not
+    // by eye. Families: 0x4D indexed (CP/TEST/LD-imm with a base+index addr), 0x5C direct
+    // LOAD direction (0x5C09's STORE sibling), 0x5D indexed (LDL store), 0x71 (LD word,
+    // register+register indexed -- the last confirmed-needed sibling of the 0x70-0x77
+    // family), 0xB0 (DAB, decimal-adjust-byte, needs MAME's Z8000_dab lookup table for
+    // correctness rather than re-deriving BCD edge cases by hand). ----
+    localparam [7:0]
+                     S_DAX_FETCH=170, S_DAX_IMM=171,
+                     S_LDM_DA_LFETCH2=172, S_LDM_DA_LFETCH3=173,
+                     S_LDLSAX_FETCH=174,
+                     S_LD71_FETCH=175, S_LD71_RD=176;
+    // ---- Found while re-verifying Batch 7 in co-sim: execution now reaches PAST the
+    // original SRAL/LDA failures and hits two more confirmed gaps, same "direct-address
+    // sibling of an already-implemented register-indirect/indexed form" shape as LDA (0x76)
+    // above -- LDL RRd,addr(rs) indexed (0x54, only its NIB2==0 direct form was in Batch 1)
+    // and LDM addr,rs,n direct-address store (0x5C09, only the register-indirect @rd/@rs
+    // forms were done). Both reuse existing, already-verified tail states unchanged. ----
+    localparam [7:0]
+                     S_LDLAX_FETCH=167, S_LDM_DA_FETCH2=168, S_LDM_DA_FETCH3=169;
     reg [7:0] state;
 
     // BATCH 2: RB(src) value staged for the LDB @Rd,rbs store merge (S_LDBST_WR) --
@@ -586,6 +660,10 @@ module z8002
                   (state==S_INCBI_WR   ) ? (R[dst] & 16'hFFFE) :
                   (state==S_INCWI_RD   ) ? (R[dst] & 16'hFFFE) :
                   (state==S_INCWI_WR   ) ? (R[dst] & 16'hFFFE) :
+                  // BATCH 8: LD rd,rs(rx) (0x71) -- ea = R[src]+R[idx] computed in
+                  // S_LD71_FETCH (idx read straight off word2's din[11:8], no idxr
+                  // staging needed since both operands are live that same cycle).
+                  (state==S_LD71_RD    ) ?  ea :
                                         pc;
     assign mreq    = (state!=S_ILLEGAL);
     assign iorq    = 1'b0;
@@ -710,6 +788,9 @@ module z8002
     reg [16:0] incw_sum, sum17, dif17;
     reg [15:0] a16, res16, fmask, fval, scnt;
     reg [7:0]  dbyte, operand_b;
+    reg [7:0]  dab_byte;          // BATCH 8: DAB source byte
+    reg [10:0] dab_idx;           // BATCH 8: DAB rom index {DA,H,C,byte}
+    reg [8:0]  dab_res;           // BATCH 8: DAB rom result {carry,byte}
     reg [4:0]  cnt;
     reg [3:0]  incn;
     reg        z,s,v,c,h,wb, cbit;
@@ -728,6 +809,23 @@ module z8002
     reg signed [15:0] div_r;     // DIV remainder
     reg signed [63:0] div_dvd64, div_dvs64, div_q64, div_qtmp64; // DIVL 64/32 scratch
     reg signed [31:0] div_r32;   // DIVL remainder
+    // ---- AREA FIX 2026-07-19: shared sequential restoring-divider datapath ----
+    // Sized 64-bit so ONE datapath serves both DIV (32/16) and DIVL (64/32); DIV
+    // simply zero/sign-pads into the same registers. Magnitude division + sign
+    // restore reproduces Verilog's signed `/`,`%` semantics exactly (truncate
+    // toward zero; remainder takes the DIVIDEND's sign) -- which the old code's
+    // header already established is algebraically identical to MAME's DIVW/DIVL
+    // abs/sign-restore dance in z8000ops.hxx. Most-negative operands are safe:
+    // negating -2^63 yields 0x8000_0000_0000_0000, which read as UNSIGNED is
+    // exactly the magnitude 2^63.
+    reg [63:0] dv_rem;           // running remainder (restoring division)
+    reg [63:0] dv_quo;           // dividend in, quotient out (shifts through)
+    reg [63:0] dv_dvsr;          // divisor magnitude
+    reg [64:0] dv_shf, dv_sub;   // combinational: shifted remainder, trial subtract
+    reg [6:0]  dv_cnt;           // iteration counter, 0..64
+    reg        dv_qneg, dv_rneg; // result signs: q = sign(dvd)^sign(dvs), r = sign(dvd)
+    reg        dv_long;          // 0 = DIV (finish via S_DIV_FIN), 1 = DIVL (S_DIVL_FIN)
+    reg signed [63:0] dv_q_signed, dv_r_signed; // combinational sign-restored results
     reg [31:0] a32, val32, res32; // ADDL/SUBL 32-bit operands/result
     reg [32:0] sum33;            // ADDL 33-bit carry scratch (dif33 doubles for SUBL/CPL)
     // BATCH 4 combinational scratch
@@ -744,9 +842,16 @@ module z8002
             psap<=16'h0000; nvi_pending<=1'b0; mcnt<=4'h0; l32wb<=1'b0;
             operand2<=16'h0000; bmask<=16'h0000; bitop_set<=1'b0;
             idxr<=4'h0;
+            target_cycles<=16'd0; cyc_count<=16'd1; // BATCH 9: cyc_count>=target_cycles so
+                                                      // the first S_FETCH0 dispatches immediately
             for (i=0;i<16;i=i+1) R[i]<=16'h0000;
         end else if (ce) begin
             retire <= 1'b0;
+            // BATCH 9: default tick, EVERY ce cycle regardless of state (an instruction's
+            // own natural execution states are NOT S_FETCH0, and must still count toward
+            // its target) -- overridden to 16'd1 only in S_FETCH0's dispatch branch below,
+            // same "default-then-override-in-a-later-branch" idiom as `retire` above.
+            cyc_count <= cyc_count + 16'd1;
             pc2 = pc + 16'd2;
             // level-triggered NVI latch (MAME execute_input_edge_triggered==false for NVI):
             // set while the line is held low; cleared exactly on accept (S_NVI_RDPC) unless
@@ -757,6 +862,22 @@ module z8002
             S_RST_PC:  begin pc <=din; state<=S_FETCH0; end
 
             S_FETCH0: begin
+              // ==== BATCH 9 2026-07-28: cycle-accuracy padding gate. `cyc_count` ticks
+              // every ce cycle unconditionally (the default assignment at the top of this
+              // block, same idiom as `retire`) starting from the instant an instruction is
+              // dispatched (reset to 1 below); `target_cycles` is that instruction's real
+              // MAME cycle count, latched at the same moment. If real hardware would still
+              // be mid-instruction, idle here (mem[pc] keeps combinationally reading the
+              // next opcode harmlessly -- addr defaults to `pc` in this state -- but we
+              // don't ACT on it yet). Once caught up, dispatch exactly as before and latch
+              // the NEW instruction's target cycle count for next time. This is the ONLY
+              // change needed for full-ISA cycle accuracy -- zero edits to any of the ~180
+              // existing dispatch arms or their state sequences below. ====
+              if (cyc_count < target_cycles) begin
+                  // not yet time -- default `cyc_count<=cyc_count+1` above already applies
+              end else begin
+              target_cycles <= lookup_cycles(din);
+              cyc_count <= 16'd1;
               // ---- NVI accept (instruction-boundary check, ahead of decode) ----
               // MAME z8002_device::Interrupt(): (m_irq_req&Z8000_NVI)&&(m_fcw&F_NVIE)
               if (nvi_pending && ((fcw & F_NVIE)!=16'h0000)) begin
@@ -799,13 +920,48 @@ module z8002
                 else if (din[15:8]==8'h00 && din[7:4]!=4'h0) begin
                     src<=din[7:4]; dst<=din[3:0]; pc<=pc2; state<=S_ADDB_RD;
                 end
-                // ---- LD @rd,rs store (0x2F) : ptr=NIB2, data=NIB3 ----
-                else if (din[15:8]==8'h2F) begin
+                // ---- LD @rd,rs store (0x2F, NIB2=dst(ptr)!=0) : ptr=NIB2, data=NIB3 ----
+                // MAME Z2F_ddN0_ssss requires ptr!=0 (R0-as-pointer is undefined here, same
+                // "N0" convention as every other @rd-pointer family in this file); the guard
+                // was missing -- found via the cycle-accuracy audit (dst==0 maps to MAME's
+                // own zinvalid table entry, not a real instruction).
+                else if (din[15:8]==8'h2F && din[7:4]!=4'h0) begin
                     dst<=din[7:4]; src<=din[3:0]; pc<=pc2; state<=S_MEMWR;
                 end
                 // ---- SLL/SRL rd,#imm (0xB3, NIB3=1) ----
                 else if (din[15:8]==8'hB3 && din[3:0]==4'h1) begin
                     dst<=din[7:4]; pc<=pc2; state<=S_SHIFT;
+                end
+                // ==== BATCH 7: SLA/SRA rd,#imm (0xB3, NIB3=9) : MAME ZB3_dddd_1001_imm8 ====
+                else if (din[15:8]==8'hB3 && din[3:0]==4'h9) begin
+                    dst<=din[7:4]; pc<=pc2; state<=S_SHIFTA;
+                end
+                // ==== BATCH 7: SLAL/SRAL rrd,#imm (0xB3, NIB3=D) : MAME ZB3_dddd_1101_imm8 ==
+                else if (din[15:8]==8'hB3 && din[3:0]==4'hD) begin
+                    dst<=din[7:4]; pc<=pc2; state<=S_SHIFTAL;
+                end
+                // ==== BATCH 7: SLLL/SRLL rrd,#imm (0xB3, NIB3=5) : MAME ZB3_dddd_0101_imm8 ==
+                else if (din[15:8]==8'hB3 && din[3:0]==4'h5) begin
+                    dst<=din[7:4]; pc<=pc2; state<=S_SHIFTL;
+                end
+                // ==== BATCH 7: LDA prd,addr (0x7600-0x760f, NIB2==0) : MAME Z76_0000_dddd_addr
+                else if (din[15:8]==8'h76 && din[7:4]==4'h0) begin
+                    dst<=din[3:0]; lda76_has_src<=1'b0; pc<=pc2; state<=S_LDA76_FETCH;
+                end
+                // ==== BATCH 7: LDA prd,addr(rs) (0x7610-0x76ff, NIB2!=0) : MAME
+                //      Z76_ssN0_dddd_addr ====
+                else if (din[15:8]==8'h76 && din[7:4]!=4'h0) begin
+                    dst<=din[3:0]; src<=din[7:4]; lda76_has_src<=1'b1; pc<=pc2; state<=S_LDA76_FETCH;
+                end
+                // ==== BATCH 8: LD rd,rs(rx) (0x71, NIB2!=0) : MAME
+                // Z71_ssN0_dddd_0000_xxxx_0000_0000. word1: src=NIB2(bits7:4,nonzero),
+                // dst=NIB3(bits3:0). word2: idx=NIB1(bits11:8), rest reserved/zero -- NOT
+                // an address literal like every other *_FETCH family in this file, so
+                // S_LD71_FETCH reads it straight off `din[11:8]` (no idxr staging) to form
+                // ea=R[src]+R[idx], then joins a dedicated one-cycle S_LD71_RD (can't reuse
+                // S_DA_RD: that path always writes back via daop, this is a fixed plain LD). ====
+                else if (din[15:8]==8'h71 && din[7:4]!=4'h0) begin
+                    src<=din[7:4]; dst<=din[3:0]; pc<=pc2; state<=S_LD71_FETCH;
                 end
                 // ---- JP cc,addr (0x5E) : cc=NIB3 ----
                 else if (din[15:8]==8'h5E) begin
@@ -819,8 +975,11 @@ module z8002
                 else if (din[15:8]==8'h6F && din[7:4]==4'h0) begin
                     src<=din[3:0]; daop<=DA_STR; pc<=pc2; state<=S_DA_FETCH;
                 end
-                // ---- LD @rd,#imm16 (0x0D, NIB3=5): EA=R[dst] ----
-                else if (din[15:8]==8'h0D && din[3:0]==4'h5) begin
+                // ---- LD @rd,#imm16 (0x0D, NIB3=5, dst!=0): EA=R[dst] ----
+                // MAME Z0D_ddN0_0101_imm16 requires dst!=0 (R0-as-pointer undefined, same
+                // "N0" convention used elsewhere); guard was missing, found via the
+                // cycle-accuracy audit (dst==0 maps to MAME's zinvalid entry).
+                else if (din[15:8]==8'h0D && din[3:0]==4'h5 && din[7:4]!=4'h0) begin
                     ea<=R[din[7:4]]; daop<=DA_STI; pc<=pc2; state<=S_DA_IMM;
                 end
                 // ---- direct group (0x4D, NIB2=0): 5=LD#imm 8=CLR 4=TEST ----
@@ -830,6 +989,21 @@ module z8002
                         4'h5: begin daop<=DA_STI; state<=S_DA_FETCH; end
                         4'h8: begin daop<=DA_CLR; state<=S_DA_FETCH; end
                         4'h4: begin daop<=DA_TST; state<=S_DA_FETCH; end
+                        default: begin illegal<=1'b1; state<=S_ILLEGAL; end
+                    endcase
+                end
+                // ==== BATCH 8: indexed group (0x4D, NIB2!=0): addr(rx) instead of plain addr
+                // -- 1=CP#imm(NEW: MAME Z4D_ddN0_0001_addr_imm16, compare mem@addr(rx) against
+                // a fetched imm16, discard result, CZSV flags per the existing S_ALU CP shape)
+                // 5=LD#imm(MAME Z4D_ddN0_0101_addr_imm16) 4=TEST(MAME Z4D_ddN0_0100_addr).
+                // "dst" here is really the INDEX register (MAME's own naming, kept only for
+                // its GET_DST macro use) -- reused as `idxr` per this file's convention. ====
+                else if (din[15:8]==8'h4D && din[7:4]!=4'h0) begin
+                    idxr<=din[7:4]; pc<=pc2;
+                    case (din[3:0])
+                        4'h1: begin daop<=DA_CPI; state<=S_DAX_FETCH; end
+                        4'h5: begin daop<=DA_STI; state<=S_DAX_FETCH; end
+                        4'h4: begin daop<=DA_TST; state<=S_DAX_FETCH; end
                         default: begin illegal<=1'b1; state<=S_ILLEGAL; end
                     endcase
                 end
@@ -1028,9 +1202,23 @@ module z8002
                 else if (din[15:8]==8'h54 && din[7:4]==4'h0) begin
                     dst<=din[3:0]; pc<=pc2; state<=S_LDLA_FETCH;
                 end
+                // ==== BATCH 7 (post-verify): LDL RRd,addr(rs) indexed (0x54, NIB2!=0) :
+                //      MAME Z54_ssN0_dddd_addr. Same S_L32_RD_HI/LO read tail as the direct
+                //      form above, just ea=addr+R[src] instead of ea=addr. ====
+                else if (din[15:8]==8'h54 && din[7:4]!=4'h0) begin
+                    dst<=din[3:0]; src<=din[7:4]; pc<=pc2; state<=S_LDLAX_FETCH;
+                end
                 // ---- LDL addr,RRs direct (0x5D, NIB2=0) : MAME Z5D_0000_ssss_addr ----
                 else if (din[15:8]==8'h5D && din[7:4]==4'h0) begin
                     src<=din[3:0]; pc<=pc2; state<=S_LDLSA_FETCH;
+                end
+                // ==== BATCH 8: LDL addr(rx),RRs indexed (0x5D, NIB2!=0) : MAME
+                // Z5D_ddN0_ssss_addr (dst here is the INDEX reg per z8000ops.hxx GET_DST,
+                // src is the reg-pair stored). Same S_L32_WR_HI/LO store tail as the direct
+                // form above, just ea=addr+R[idx] instead of ea=addr -- mirrors the 0x54
+                // indexed-load sibling (S_LDLAX_FETCH) added in Batch 7. ====
+                else if (din[15:8]==8'h5D && din[7:4]!=4'h0) begin
+                    src<=din[3:0]; idxr<=din[7:4]; pc<=pc2; state<=S_LDLSAX_FETCH;
                 end
                 // ---- LDM rd,@rs,n (0x1C, NIB2=src!=0,NIB3=1) : MAME Z1C_ssN0_0001_0000_dddd_0000_nmin1 ----
                 // word2 = {4'b0,dst[11:8],4'b0,cnt[3:0]}; transfers cnt+1 words mem->regs,
@@ -1041,6 +1229,23 @@ module z8002
                 // ---- LDM @rd,rs,n (0x1C, NIB2=dst!=0,NIB3=9) : MAME Z1C_ddN0_1001_0000_ssss_0000_nmin1 ----
                 else if (din[15:8]==8'h1C && din[7:4]!=4'h0 && din[3:0]==4'h9) begin
                     dst<=din[7:4]; pc<=pc2; state<=S_LDM_S_FETCH2;
+                end
+                // ==== BATCH 7 (post-verify): LDM addr,rs,n (0x5C09) direct-address STORE :
+                //      MAME Z5C_0000_1001_0000_ssss_0000_nmin1_addr.
+                //      Reuses S_LDM_S_WR's loop tail UNCHANGED -- only ea's source differs
+                //      (a fetched addr word here vs R[dst] for the @rd form above). ====
+                else if (din==16'h5C09) begin
+                    pc<=pc2; state<=S_LDM_DA_FETCH2;
+                end
+                // ==== BATCH 8: LDM rd,addr,n (0x5C01) direct-address LOAD, the load-direction
+                // sibling of 0x5C09 above : MAME Z5C_0000_0001_0000_dddd_0000_nmin1_addr.
+                // Reuses S_LDM_L_RD's loop tail UNCHANGED (same register-fill loop the @rs
+                // register-indirect LOAD form already uses). Both TESTL forms (0x5C08/0x5CN8)
+                // and the indexed STORE/LOAD (0x5CN9/0x5CN1) are still NOT implemented -- not
+                // confirmed needed by the full-trace audit, matches "close reachable gaps
+                // only". ====
+                else if (din==16'h5C01) begin
+                    pc<=pc2; state<=S_LDM_DA_LFETCH2;
                 end
                 // ==== BATCH 2 PART A: indirect-indirect PUSHL/PUSH/POPL/POP ================
                 // ---- PUSHL @Rd,@Rs (0x11, both nibbles !=0) : MAME Z11_ddN0_ssN0 "pushl @rd,@rs" ----
@@ -1466,6 +1671,23 @@ module z8002
                 // 7. ----
                 else if (din[15:8]==8'hB1 && din[3:0]==4'h0) begin
                     R[din[7:4]] <= {{8{R[din[7:4]][7]}}, R[din[7:4]][7:0]};
+                    pc<=pc2; retire<=1'b1;
+                end
+                // ==== BATCH 8: DAB rbd (0xB0d0, NIB0=0) : MAME ZB0_dddd_0000 "dab rbd",
+                // flags CZS---. dst(NIB2=din[7:4]) is a byte-reg code (dst[3] selects hi/lo
+                // half of R[dst[2:0]], same convention as ldbst_val/exb_val above). Single-
+                // cycle register-only op, no memory access -- retires directly like the
+                // EXTSB/EXTS forms just above. idx into dab_rom = {DA,H,C,byte-value} per
+                // z8000dab.h's own header comment; CZS recomputed from the RESULT byte
+                // (CLR_CZS+CHK_XXXB_ZS: Z=(result==0), S=result[7]; H is left UNCHANGED --
+                // MAME's DAB never touches F_H, matching CLR_CZS's mask exactly). ====
+                else if (din[15:8]==8'hB0 && din[3:0]==4'h0) begin
+                    dab_byte = din[7] ? R[din[6:4]][7:0] : R[din[6:4]][15:8];
+                    dab_idx  = {fcw[FDA], fcw[FH], fcw[FC], dab_byte};
+                    dab_res  = dab_rom[dab_idx];
+                    if (din[7]) R[din[6:4]][7:0]  <= dab_res[7:0];
+                    else        R[din[6:4]][15:8] <= dab_res[7:0];
+                    fcw<=(fcw & ~(MC|MZ|MS)) | (dab_res[8]?MC:0) | ((dab_res[7:0]==8'h00)?MZ:0) | (dab_res[7]?MS:0);
                     pc<=pc2; retire<=1'b1;
                 end
                 // ---- EXTS rrd (0xB1dA, NIB0=A) : MAME ZB1_dddd_1010 "exts rrd", flags ------.
@@ -2022,6 +2244,7 @@ module z8002
                 //   is ever shown to reach it.
                 else begin illegal<=1'b1; state<=S_ILLEGAL; end
               end
+              end // BATCH 9: closes the cyc_count>=target_cycles dispatch-ready branch
             end
 
             // fetch 2nd word as immediate operand
@@ -2071,10 +2294,34 @@ module z8002
             S_DA_IMM: begin operand<=din; pc<=pc+16'd2; state<=S_DA_WR; end
             S_DA_RD:  begin
                 if (daop==DA_LDR) R[dst]<=din;
+                // BATCH 8: CP mem,#imm (indexed only, DA_CPI) -- same dif17/CZSV formula as
+                // the existing S_ALU SUB/CP case, `din`=mem value just read, `operand`=imm16
+                // already staged by S_DAX_IMM. Discard-only compare, no register write-back.
+                else if (daop==DA_CPI) begin
+                    dif17={1'b0,din}-{1'b0,operand};
+                    c=dif17[16]; z=(dif17[15:0]==0); s=dif17[15];
+                    v=(~operand[15]&din[15]&~dif17[15])|(operand[15]&~din[15]&dif17[15]);
+                    fcw<=(fcw & ~(MC|MZ|MS|MV)) | (c?MC:0)|(z?MZ:0)|(s?MS:0)|(v?MV:0);
+                end
                 else fcw<=(fcw & ~(MZ|MS)) | ((din==0)?MZ:0) | (din[15]?MS:0);  // TEST
                 retire<=1'b1; state<=S_FETCH0;
             end
             S_DA_WR:  begin retire<=1'b1; state<=S_FETCH0; end
+
+            // ==== BATCH 8: indexed sibling of S_DA_FETCH/S_DA_IMM -- ea=addr+R[idxr] instead
+            // of ea=addr, then joins the EXISTING S_DA_RD/S_DA_WR tail unchanged (same pattern
+            // as S_LDAX_FETCH/S_LDSAX_FETCH already do for the 0x61/0x6F family). ====
+            S_DAX_FETCH: begin
+                ea<=din+R[idxr]; pc<=pc+16'd2;
+                case (daop)
+                    DA_TST:        state<=S_DA_RD;
+                    default:       state<=S_DAX_IMM;  // DA_STI, DA_CPI (both need imm16 next)
+                endcase
+            end
+            S_DAX_IMM: begin
+                operand<=din; pc<=pc+16'd2;
+                state<=(daop==DA_STI) ? S_DA_WR : S_DA_RD;  // STI writes; CPI reads mem next
+            end
 
             // ---- SLL(+)/SRL(-) rd,#imm16 (flags CZS) ----
             S_SHIFT: begin
@@ -2091,6 +2338,92 @@ module z8002
                 fcw<=(fcw & ~(MC|MZ|MS)) | (cbit?MC:0)|(z?MZ:0)|(s?MS:0);
                 pc<=pc+16'd2; retire<=1'b1; state<=S_FETCH0;
             end
+
+            // ==== BATCH 7 2026-07-27: SLA/SRA rd,#imm (word, flags CZSV) ==================
+            // Left branch is bit-identical to S_SHIFT's left branch (arithmetic and logical
+            // left shift produce the same result bits -- only the flags differ); right
+            // branch sign-extends instead of zero-filling. V: left sets it on a sign change
+            // (MAME `if((result^dest)&S16)SET_V`); right NEVER sets it -- SRAW's actual body
+            // has no SET_V call at all despite the "flags CZSV--" doc-comment, verified
+            // against the macro body, not assumed from the mnemonic. ----
+            S_SHIFTA: begin
+                a16=R[dst]; scnt = din[15] ? (16'h0000 - din) : din; cnt=scnt[4:0];
+                if (din[15]) begin // right, arithmetic (sign-extend)
+                    res16 = $signed(a16) >>> cnt;
+                    cbit  = (cnt!=0) ? (($signed(a16) >>> (cnt-1)) & 16'h1) : 1'b0;
+                    v     = 1'b0;
+                end else begin // left
+                    res16 = a16 << cnt;
+                    cbit  = (cnt!=0) ? (((a16 << (cnt-1)) & 16'h8000)!=0) : 1'b0;
+                    v     = (res16[15]!=a16[15]);
+                end
+                z=(res16==0); s=res16[15];
+                R[dst]<=res16;
+                fcw<=(fcw & ~(MC|MZ|MS|MV)) | (cbit?MC:0)|(z?MZ:0)|(s?MS:0)|(v?MV:0);
+                pc<=pc+16'd2; retire<=1'b1; state<=S_FETCH0;
+            end
+
+            // ==== BATCH 7 2026-07-27: SLAL/SRAL rrd,#imm (long, flags CZSV) ================
+            // 32-bit sibling of S_SHIFTA above, register-pair access matches the existing
+            // S_LALU_GO convention ({dst[3:1],1'b0} forces the even base register). This is
+            // the opcode that was actually hitting S_ILLEGAL (pp_sub1.asm:83, `sral rr2,#4`,
+            // encoding 0xB32D). Same right-shift-never-sets-V rule as S_SHIFTA. ----
+            S_SHIFTAL: begin
+                a32 = {R[{dst[3:1],1'b0}], R[{dst[3:1],1'b0}+4'd1]};
+                scnt = din[15] ? (16'h0000 - din) : din; cnt=scnt[4:0];
+                if (din[15]) begin // right, arithmetic (sign-extend)
+                    res32 = $signed(a32) >>> cnt;
+                    cbit  = (cnt!=0) ? (($signed(a32) >>> (cnt-1)) & 32'h1) : 1'b0;
+                    v     = 1'b0;
+                end else begin // left
+                    res32 = a32 << cnt;
+                    cbit  = (cnt!=0) ? (((a32 << (cnt-1)) & 32'h80000000)!=0) : 1'b0;
+                    v     = (res32[31]!=a32[31]);
+                end
+                z=(res32==0); s=res32[31];
+                R[{dst[3:1],1'b0}]      <= res32[31:16];
+                R[{dst[3:1],1'b0}+4'd1] <= res32[15:0];
+                fcw<=(fcw & ~(MC|MZ|MS|MV)) | (cbit?MC:0)|(z?MZ:0)|(s?MS:0)|(v?MV:0);
+                pc<=pc+16'd2; retire<=1'b1; state<=S_FETCH0;
+            end
+
+            // ==== BATCH 7 2026-07-27: SLLL/SRLL rrd,#imm (long, flags CZS, no V) ===========
+            // 32-bit sibling of the existing word S_SHIFT (logical, zero-fill right shift). ---
+            S_SHIFTL: begin
+                a32 = {R[{dst[3:1],1'b0}], R[{dst[3:1],1'b0}+4'd1]};
+                scnt = din[15] ? (16'h0000 - din) : din; cnt=scnt[4:0];
+                if (din[15]) begin
+                    res32 = a32 >> cnt;
+                    cbit  = (cnt!=0) ? ((a32 >> (cnt-1)) & 32'h1) : 1'b0;
+                end else begin
+                    res32 = a32 << cnt;
+                    cbit  = (cnt!=0) ? (((a32 << (cnt-1)) & 32'h80000000)!=0) : 1'b0;
+                end
+                z=(res32==0); s=res32[31];
+                R[{dst[3:1],1'b0}]      <= res32[31:16];
+                R[{dst[3:1],1'b0}+4'd1] <= res32[15:0];
+                fcw<=(fcw & ~(MC|MZ|MS)) | (cbit?MC:0)|(z?MZ:0)|(s?MS:0);
+                pc<=pc+16'd2; retire<=1'b1; state<=S_FETCH0;
+            end
+
+            // ==== BATCH 7 2026-07-27: LDA prd,addr[(rs)] -- flags: ------ (untouched) ====
+            // Non-segmented (Z8002) mode only: RW(dst) = addr [+ R[src]]. No memory access
+            // at all -- `addr` is a raw absolute 16-bit operand word (MAME GET_ADDR_RAW, no
+            // PC-relative resolution needed off-segment), NOT a pointer to dereference. ----
+            S_LDA76_FETCH: begin operand<=din; pc<=pc+16'd2; state<=S_LDA76_GO; end
+            S_LDA76_GO: begin
+                R[dst] <= operand + (lda76_has_src ? R[src] : 16'h0000);
+                retire<=1'b1; state<=S_FETCH0;
+            end
+
+            // ---- BATCH 8: LD rd,rs(rx) (0x71) -- word2's `din` holds only the idx nibble
+            // (bits[11:8]), not an address literal, so it's read straight into the ea sum
+            // instead of being staged through `operand`/`idxr` like every other indexed
+            // family. ea is registered here; S_LD71_RD (added to the addr mux above as
+            // `ea`) sees `din`=mem[ea] one cycle later, same one-state-latency shape as
+            // every other *_FETCH->*_RD pair in this file. ----
+            S_LD71_FETCH: begin ea<=R[src]+R[din[11:8]]; pc<=pc+16'd2; state<=S_LD71_RD; end
+            S_LD71_RD: begin R[dst]<=din; retire<=1'b1; state<=S_FETCH0; end
 
             // ---- JP cc,addr (src holds cc) ----
             S_JP: begin
@@ -2175,7 +2508,13 @@ module z8002
             // ---- LDL RRd,addr / LDL addr,RRs: fetch the direct address, then feed
             //      the generic L32 pump (l32wb=0, plain load/store, no ptr writeback) ----
             S_LDLA_FETCH:  begin ea<=din; l32wb<=1'b0; pc<=pc+16'd2; state<=S_L32_RD_HI; end
+            // BATCH 7 (post-verify): indexed sibling of the direct form above -- same
+            // S_L32_RD_HI/LO tail, ea = addr+R[src] instead of ea = addr.
+            S_LDLAX_FETCH: begin ea<=din+R[src]; l32wb<=1'b0; pc<=pc+16'd2; state<=S_L32_RD_HI; end
             S_LDLSA_FETCH: begin ea<=din; l32wb<=1'b0; pc<=pc+16'd2; state<=S_L32_WR_HI; end
+            // BATCH 8: indexed sibling of S_LDLSA_FETCH above -- same S_L32_WR_HI/LO
+            // store tail, ea = addr+R[idxr] instead of ea = addr.
+            S_LDLSAX_FETCH: begin ea<=din+R[idxr]; l32wb<=1'b0; pc<=pc+16'd2; state<=S_L32_WR_HI; end
 
             // ---- LDM rd,@rs,n: fetch word2 (dst start reg @ bits[11:8], cnt-1 @ bits[3:0]),
             //      base pointer ea<=R[src] (src holds the ptr reg latched in S_FETCH0),
@@ -2198,6 +2537,20 @@ module z8002
                 if (mcnt==4'h0) begin retire<=1'b1; state<=S_FETCH0; end
                 else begin mcnt<=mcnt-4'd1; src<=src+4'd1; ea<=ea+16'd2; end
             end
+
+            // BATCH 7 (post-verify): LDM addr,rs,n direct-address store -- two fetches
+            // (word2: src-start+count, word3: the addr) then join S_LDM_S_WR UNCHANGED.
+            S_LDM_DA_FETCH2: begin
+                src<=din[11:8]; mcnt<=din[3:0]; pc<=pc+16'd2; state<=S_LDM_DA_FETCH3;
+            end
+            S_LDM_DA_FETCH3: begin ea<=din; pc<=pc+16'd2; state<=S_LDM_S_WR; end
+
+            // BATCH 8: LDM rd,addr,n direct-address LOAD -- same two-fetch shape as the STORE
+            // pair above (word2: dst-start+count, word3: the addr), joins S_LDM_L_RD UNCHANGED.
+            S_LDM_DA_LFETCH2: begin
+                dst<=din[11:8]; mcnt<=din[3:0]; pc<=pc+16'd2; state<=S_LDM_DA_LFETCH3;
+            end
+            S_LDM_DA_LFETCH3: begin ea<=din; pc<=pc+16'd2; state<=S_LDM_L_RD; end
 
             // ==== BATCH 2 PART A: indirect-indirect PUSHL/PUSH/POP =====================
             // ---- PUSHL @Rd,@Rs (0x11): read long @R[src] (unmodified), write long @ea
@@ -2349,29 +2702,70 @@ module z8002
             //      cleared, dest UNCHANGED) replicated exactly. ----
             S_DIV_IMM: begin operand<=din; pc<=pc+16'd2; state<=S_DIV_GO; end
             S_DIV_RD:  begin operand<=din; state<=S_DIV_GO; end              // addr=R[src]&~1
+            // AREA FIX 2026-07-19: was a single-cycle `div_q = dvd/dvs; div_r = dvd%dvs;`
+            // which inferred two full combinational dividers. Now loads the shared
+            // sequential divider and hands off to S_DIV_BUSY -> S_DIV_FIN. The
+            // divide-by-zero early-out keeps its original single-cycle behaviour
+            // (dest UNCHANGED, Z+V set, C+S cleared) and never enters the divider.
             S_DIV_GO: begin
                 if (operand==16'h0000) begin
                     c=1'b0; z=1'b1; s=1'b0; v=1'b1;   // dest UNCHANGED -- no register write
+                    fcw<=(fcw & ~(MC|MZ|MS|MV)) | (c?MC:0)|(z?MZ:0)|(s?MS:0)|(v?MV:0);
+                    retire<=1'b1; state<=S_FETCH0;
                 end else begin
                     div_dvd = $signed({R[{dst[3:1],1'b0}], R[{dst[3:1],1'b0}+4'd1]});
                     div_dvs = {{16{operand[15]}}, operand};
-                    div_q   = div_dvd / div_dvs;
-                    div_r   = div_dvd % div_dvs;
-                    if (div_q < -32'sd32768 || div_q > 32'sd32767) begin
-                        v = 1'b1;
-                        div_qtmp = div_q >>> 1;
-                        if (div_qtmp >= -32'sd32768 && div_qtmp <= 32'sd32767) begin
-                            div_q = (div_qtmp < 0) ? -32'sd1 : 32'sd0;
-                            c = 1'b1; z=(div_q[15:0]==16'h0000); s=div_q[15];
-                        end else begin
-                            c = 1'b0; z = 1'b0; s = 1'b0;
-                        end
-                    end else begin
-                        v = 1'b0; c = 1'b0; z=(div_q[15:0]==16'h0000); s=div_q[15];
-                    end
-                    R[{dst[3:1],1'b0}]      <= div_r[15:0];
-                    R[{dst[3:1],1'b0}+4'd1] <= div_q[15:0];
+                    dv_qneg <= div_dvd[31] ^ div_dvs[31];
+                    dv_rneg <= div_dvd[31];
+                    dv_quo  <= {32'd0, (div_dvd[31] ? -div_dvd : div_dvd)};
+                    dv_dvsr <= {32'd0, (div_dvs[31] ? -div_dvs : div_dvs)};
+                    dv_rem  <= 64'd0;
+                    dv_cnt  <= 7'd0;
+                    dv_long <= 1'b0;
+                    state   <= S_DIV_BUSY;
                 end
+            end
+
+            // ---- shared restoring-division iteration (DIV and DIVL both land here) ----
+            // Classic shift-subtract: {rem,quo} shifts left one bit per cycle, the bit
+            // shifted out of quo's MSB enters rem's LSB, then a trial subtract decides
+            // the quotient bit. 64 iterations covers both widths (DIV's 32-bit dividend
+            // is zero-padded into the low half, so its first 32 shifts are harmless).
+            S_DIV_BUSY: begin
+                dv_shf = {dv_rem, dv_quo[63]};        // 65-bit (rem<<1 | next dividend bit)
+                dv_sub = dv_shf - {1'b0, dv_dvsr};    // bit 64 = borrow => dvsr was bigger
+                if (!dv_sub[64]) begin
+                    dv_rem <= dv_sub[63:0];
+                    dv_quo <= {dv_quo[62:0], 1'b1};
+                end else begin
+                    dv_rem <= dv_shf[63:0];
+                    dv_quo <= {dv_quo[62:0], 1'b0};
+                end
+                dv_cnt <= dv_cnt + 7'd1;
+                if (dv_cnt == 7'd63) state <= dv_long ? S_DIVL_FIN : S_DIV_FIN;
+            end
+
+            // ---- DIV writeback: sign-restore, then the ORIGINAL overflow/flag logic
+            //      verbatim (quotient -> lo word, remainder -> hi word of RL(dst)). ----
+            S_DIV_FIN: begin
+                dv_q_signed = dv_qneg ? -$signed(dv_quo) : $signed(dv_quo);
+                dv_r_signed = dv_rneg ? -$signed(dv_rem) : $signed(dv_rem);
+                div_q = dv_q_signed[31:0];
+                div_r = dv_r_signed[15:0];
+                if (div_q < -32'sd32768 || div_q > 32'sd32767) begin
+                    v = 1'b1;
+                    div_qtmp = div_q >>> 1;
+                    if (div_qtmp >= -32'sd32768 && div_qtmp <= 32'sd32767) begin
+                        div_q = (div_qtmp < 0) ? -32'sd1 : 32'sd0;
+                        c = 1'b1; z=(div_q[15:0]==16'h0000); s=div_q[15];
+                    end else begin
+                        c = 1'b0; z = 1'b0; s = 1'b0;
+                    end
+                end else begin
+                    v = 1'b0; c = 1'b0; z=(div_q[15:0]==16'h0000); s=div_q[15];
+                end
+                R[{dst[3:1],1'b0}]      <= div_r[15:0];
+                R[{dst[3:1],1'b0}+4'd1] <= div_q[15:0];
                 fcw<=(fcw & ~(MC|MZ|MS|MV)) | (c?MC:0)|(z?MZ:0)|(s?MS:0)|(v?MV:0);
                 retire<=1'b1; state<=S_FETCH0;
             end
@@ -2400,32 +2794,53 @@ module z8002
             //      first -- mirrors DIV's hi=remainder/lo=quotient packing one level up. ----
             S_DIVL_RD_HI: begin operand<=din;  state<=S_DIVL_RD_LO; end    // addr=R[src]: hi word
             S_DIVL_RD_LO: begin operand2<=din; state<=S_DIVL_GO; end       // addr=R[src]+2: lo word
+            // AREA FIX 2026-07-19: same treatment as DIV -- was a single-cycle 64-bit
+            // `/` + `%` pair (the Div1/Mod1 instances, ~4.2k ALMs per CPU on their own).
+            // Loads the SAME shared divider, distinguished only by dv_long.
             S_DIVL_GO: begin
                 qbase = {dst[3:2],2'b00};
                 if (operand==16'h0000 && operand2==16'h0000) begin
                     c=1'b0; z=1'b1; s=1'b0; v=1'b1;   // dest UNCHANGED
+                    fcw<=(fcw & ~(MC|MZ|MS|MV)) | (c?MC:0)|(z?MZ:0)|(s?MS:0)|(v?MV:0);
+                    retire<=1'b1; state<=S_FETCH0;
                 end else begin
                     div_dvd64 = $signed({R[qbase],R[qbase+4'd1],R[qbase+4'd2],R[qbase+4'd3]});
                     div_dvs64 = {{32{operand[15]}}, operand, operand2};
-                    div_q64   = div_dvd64 / div_dvs64;
-                    div_r32   = div_dvd64 % div_dvs64;
-                    if (div_q64 < -64'sd2147483648 || div_q64 > 64'sd2147483647) begin
-                        v = 1'b1;
-                        div_qtmp64 = div_q64 >>> 1;
-                        if (div_qtmp64 >= -64'sd2147483648 && div_qtmp64 <= 64'sd2147483647) begin
-                            div_q64 = (div_qtmp64 < 0) ? -64'sd1 : 64'sd0;
-                            c = 1'b1; z=(div_q64[31:0]==32'h00000000); s=div_q64[31];
-                        end else begin
-                            c = 1'b0; z = 1'b0; s = 1'b0;
-                        end
-                    end else begin
-                        v = 1'b0; c = 1'b0; z=(div_q64[31:0]==32'h00000000); s=div_q64[31];
-                    end
-                    R[qbase]      <= div_r32[31:16];
-                    R[qbase+4'd1] <= div_r32[15:0];
-                    R[qbase+4'd2] <= div_q64[31:16];
-                    R[qbase+4'd3] <= div_q64[15:0];
+                    dv_qneg <= div_dvd64[63] ^ div_dvs64[63];
+                    dv_rneg <= div_dvd64[63];
+                    dv_quo  <= div_dvd64[63] ? -div_dvd64 : div_dvd64;
+                    dv_dvsr <= div_dvs64[63] ? -div_dvs64 : div_dvs64;
+                    dv_rem  <= 64'd0;
+                    dv_cnt  <= 7'd0;
+                    dv_long <= 1'b1;
+                    state   <= S_DIV_BUSY;
                 end
+            end
+
+            // ---- DIVL writeback: sign-restore, then the ORIGINAL overflow/flag logic
+            //      verbatim (quotient -> low half, remainder -> high half, MSW-first). ----
+            S_DIVL_FIN: begin
+                qbase = {dst[3:2],2'b00};
+                dv_q_signed = dv_qneg ? -$signed(dv_quo) : $signed(dv_quo);
+                dv_r_signed = dv_rneg ? -$signed(dv_rem) : $signed(dv_rem);
+                div_q64 = dv_q_signed;
+                div_r32 = dv_r_signed[31:0];
+                if (div_q64 < -64'sd2147483648 || div_q64 > 64'sd2147483647) begin
+                    v = 1'b1;
+                    div_qtmp64 = div_q64 >>> 1;
+                    if (div_qtmp64 >= -64'sd2147483648 && div_qtmp64 <= 64'sd2147483647) begin
+                        div_q64 = (div_qtmp64 < 0) ? -64'sd1 : 64'sd0;
+                        c = 1'b1; z=(div_q64[31:0]==32'h00000000); s=div_q64[31];
+                    end else begin
+                        c = 1'b0; z = 1'b0; s = 1'b0;
+                    end
+                end else begin
+                    v = 1'b0; c = 1'b0; z=(div_q64[31:0]==32'h00000000); s=div_q64[31];
+                end
+                R[qbase]      <= div_r32[31:16];
+                R[qbase+4'd1] <= div_r32[15:0];
+                R[qbase+4'd2] <= div_q64[31:16];
+                R[qbase+4'd3] <= div_q64[15:0];
                 fcw<=(fcw & ~(MC|MZ|MS|MV)) | (c?MC:0)|(z?MZ:0)|(s?MS:0)|(v?MV:0);
                 retire<=1'b1; state<=S_FETCH0;
             end
