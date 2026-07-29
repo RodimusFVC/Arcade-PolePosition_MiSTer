@@ -194,6 +194,7 @@ architecture struct of poleposition is
 
  signal sb0_w          : std_logic;                     -- LS259 q6 (auto_start_mask = not sb0)
  signal namco_reset_w  : std_logic;                     -- LS259 q1 (51xx/53xx/54xx reset, MAME reset(state))
+ signal chacl_w        : std_logic;                     -- LS259 q7 (alpha layer enable color+msb, polepos_v.cpp:159-166)
  signal mcu_reset_n    : std_logic;                     -- = not reset AND namco_reset_w
 
  signal n06_chipsel    : std_logic_vector(3 downto 0);
@@ -328,6 +329,7 @@ architecture struct of poleposition is
    ce              : in  std_logic;
    hpos            : in  std_logic_vector(8 downto 0);
    vpos            : in  std_logic_vector(8 downto 0);
+   chacl           : in  std_logic;
    alpha_scan_addr : out std_logic_vector(10 downto 0);
    alpha_scan_dout : in  std_logic_vector(15 downto 0);
    alpha_gfx_addr  : out std_logic_vector(11 downto 0);
@@ -506,6 +508,7 @@ port map(
 	ce               => ena_vidgen,
 	hpos             => hcnt,
 	vpos             => vcnt,
+	chacl            => chacl_w,
 	alpha_scan_addr  => bru_scan_addr,
 	alpha_scan_dout  => alpha_scan_dout,
 	alpha_gfx_addr   => gfx_addr,
@@ -549,7 +552,7 @@ port map(
 	sound_en         => sound_en_w,
 	gasel            => gasel_w,
 	sb0              => sb0_w,
-	chacl            => open,
+	chacl            => chacl_w,
 	sub_nvi_trig     => open,
 	vram_addr        => open,
 	vram_dout        => open,
@@ -623,27 +626,28 @@ port map(
 	intr_n   => adc_intr_n_w
 );
 
--- STARTUP-STRIP-2026-07-27: WSG not needed to reach/observe the self-test;
--- commented out to cut Quartus compile time (namco_wsg8 was flagged heavy,
--- ~2,634 ALMs for an 8-voice WSG per the 2026-07-19 LE-overflow note) while
--- chasing the boot hang. Uncomment + restore the `audio <= (others=>'0')`
--- removal comment above to bring sound back.
--- u_wsg : namco_wsg8
--- port map(
--- 	clk       => clock_18,
--- 	reset     => reset,
--- 	sound_en  => sound_en_w,
--- 	reg_addr  => wsg_addr_w,
--- 	reg_din   => wsg_dout_w,
--- 	reg_wr    => wsg_wr_w,
--- 	reg_dout  => wsg_din_w,
--- 	wave_wr   => wsg_prom_wr,
--- 	wave_addr => wsg_prom_addr,
--- 	wave_data => wsg_prom_data,
--- 	audio     => audio
--- );
-audio     <= (others => '0');
-wsg_din_w <= (others => '0');
+-- RESTORED-2026-07-28: STARTUP-STRIP-2026-07-27 had this commented out (WSG
+-- was ~2,634 ALMs, cut to save Quartus compile time while chasing the boot
+-- hang). The z8002.sv register-writeback-bus refactor freed ~5,400 ALMs
+-- (28,789->23,364, 56% device util post-fit), so there's ample headroom to
+-- bring real sound back. This also fixes the sim/HW self-test divergence on
+-- the WSG readback stub (production tied wsg_din_w to 0x00, the Verilator
+-- testbench independently tied it to 0xFF -- restoring the real chip here
+-- removes the stub entirely, so there's nothing left to disagree).
+u_wsg : namco_wsg8
+port map(
+	clk       => clock_18,
+	reset     => reset,
+	sound_en  => sound_en_w,
+	reg_addr  => wsg_addr_w,
+	reg_din   => wsg_dout_w,
+	reg_wr    => wsg_wr_w,
+	reg_dout  => wsg_din_w,
+	wave_wr   => wsg_prom_wr,
+	wave_addr => wsg_prom_addr,
+	wave_data => wsg_prom_data,
+	audio     => audio
+);
 
 -- ---- Namco 5xxx MCU clock enable (see signal declaration comment) ----------
 process (clock_18)

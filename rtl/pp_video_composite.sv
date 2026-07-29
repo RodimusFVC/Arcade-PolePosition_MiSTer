@@ -25,6 +25,7 @@ module pp_video_composite
     input  wire        ce,
     input  wire [8:0]  hpos,
     input  wire [8:0]  vpos,
+    input  wire        chacl,        // LS259 q7: alpha color+msb enable (0 at reset)
 
     // ---- ALPHA ----
     output wire [10:0] alpha_scan_addr,  input wire [15:0] alpha_scan_dout,
@@ -52,10 +53,22 @@ module pp_video_composite
     output wire [3:0]  g,
     output wire [3:0]  b
 );
+    // REVERTED-2026-07-28: a same-session fix attempted here (subtracting a
+    // constant 128 from hpos) was based on a wrong premise -- it assumed the
+    // active display width was the full raw hcnt range (128-511, 384px), but
+    // gen_video.vhd's own hblank compares (hcnt=475 assert / hcnt=187
+    // deassert) show the TRUE active region is only hcnt 187-474 (288px).
+    // Real hardware never shows the difference: poleposition.vhd exports
+    // blankn/video_blankn as OUTPUT ports, blanked downstream by MiSTer's own
+    // scandoubler/arcade_video -- this file's raw RGB was never the problem.
+    // The actual bug was in the Verilator CAPTURE (sim_main.cpp/play_main.cpp
+    // never applied that blanking, capturing the full unblanked hblank
+    // region), fixed there instead -- see those files' FIX-2026-07-28 notes.
+
     // ======================= ALPHA =========================================
     wire [5:0] a_color; wire [1:0] a_pixel; wire a_bank;
     pp_tile_layer #(.SCAN_COLS(0), .COLS(32), .ROWS(32), .USE_HSCROLL(0), .BANK_128V(1))
-    u_alpha (.clk(clk), .ce(ce), .hpos(hpos), .vpos(vpos), .hscroll(16'd0),
+    u_alpha (.clk(clk), .ce(ce), .hpos(hpos), .vpos(vpos), .hscroll(16'd0), .chacl(chacl),
              .scan_addr(alpha_scan_addr), .scan_dout(alpha_scan_dout),
              .gfx_addr(alpha_gfx_addr), .gfx_data(alpha_gfx_data),
              .color(a_color), .pixel(a_pixel), .bank128v(a_bank));
@@ -68,7 +81,7 @@ module pp_video_composite
     // ======================= VIEW ==========================================
     wire [5:0] v_color; wire [1:0] v_pixel; wire v_bunused;
     pp_tile_layer #(.SCAN_COLS(1), .COLS(64), .ROWS(16), .USE_HSCROLL(1), .BANK_128V(0))
-    u_view (.clk(clk), .ce(ce), .hpos(hpos), .vpos(vpos), .hscroll(view_hscroll),
+    u_view (.clk(clk), .ce(ce), .hpos(hpos), .vpos(vpos), .hscroll(view_hscroll), .chacl(1'b1),
             .scan_addr(view_scan_addr), .scan_dout(view_scan_dout),
             .gfx_addr(view_gfx_addr), .gfx_data(view_gfx_data),
             .color(v_color), .pixel(v_pixel), .bank128v(v_bunused));
@@ -77,43 +90,37 @@ module pp_video_composite
             .prom_data(prom_data), .color(v_color), .pixel(v_pixel), .r(vr), .g(vg), .b(vb));
 
     // ======================= ROAD ==========================================
-    // STARTUP-STRIP-2026-07-27: road not needed to reach/observe the self-test
-    // (view+alpha only); commented out to cut Quartus compile time + Verilator
-    // build time while chasing the boot hang. Uncomment to restore.
-    // wire [9:0] road_idx; wire road_act;
-    // pp_road_gen u_road (.clk(clk), .ce(ce), .hpos(hpos), .vpos(vpos),
-    //         .road_vscroll(road_vscroll),
-    //         .scan_road_addr(road_scan_addr), .scan_road_dout(road_scan_dout),
-    //         .road_rom_addr(road_rom_addr), .road_rom_data(road_rom_data),
-    //         .prom_wr(prom_wr), .prom_addr(prom_addr), .prom_data(prom_data),
-    //         .road_index(road_idx), .road_active(road_act));
-    // wire [7:0] rr, rg, rb;
-    // pp_palette_road u_pal_r (.clk(clk), .prom_wr(prom_wr), .prom_addr(prom_addr),
-    //         .prom_data(prom_data), .road_index(road_idx), .r(rr), .g(rg), .b(rb));
-    assign road_scan_addr = 10'd0;
-    assign road_rom_addr  = 15'd0;
-    wire [7:0] rr = 8'h00, rg = 8'h00, rb = 8'h00;
+    // RESTORED-2026-07-28: STARTUP-STRIP-2026-07-27 had this commented out
+    // (cut Quartus/Verilator build time while chasing the boot hang). The
+    // z8002.sv register-writeback-bus refactor freed ~5,400 ALMs, so there's
+    // ample headroom. NOTE: these generators are UNVERIFIED DRAFTS (see file
+    // header) -- never co-sim-proven against MAME, restoring them is turning
+    // on untested code, not known-good code.
+    wire [9:0] road_idx; wire road_act;
+    pp_road_gen u_road (.clk(clk), .ce(ce), .hpos(hpos), .vpos(vpos),
+            .road_vscroll(road_vscroll),
+            .scan_road_addr(road_scan_addr), .scan_road_dout(road_scan_dout),
+            .road_rom_addr(road_rom_addr), .road_rom_data(road_rom_data),
+            .prom_wr(prom_wr), .prom_addr(prom_addr), .prom_data(prom_data),
+            .road_index(road_idx), .road_active(road_act));
+    wire [7:0] rr, rg, rb;
+    pp_palette_road u_pal_r (.clk(clk), .prom_wr(prom_wr), .prom_addr(prom_addr),
+            .prom_data(prom_data), .road_index(road_idx), .r(rr), .g(rg), .b(rb));
 
     // ======================= SPRITE ========================================
-    // STARTUP-STRIP-2026-07-27: sprite not needed for the self-test either.
-    // Commented out, same reason as road above. Uncomment to restore.
-    // wire [3:0] s_pen; wire [5:0] s_color; wire s_bank, s_active;
-    // pp_sprite_gen u_spr (.clk(clk), .ce(ce), .hpos(hpos), .vpos(vpos),
-    //         .scan_sprite_addr(sprite_scan_addr), .scan_sprite_dout(sprite_scan_dout),
-    //         .scalelut_addr(scalelut_addr), .scalelut_data(scalelut_data),
-    //         .sprgfx_addr(sprgfx_addr), .sprgfx_data(sprgfx_data),
-    //         .prom_wr(prom_wr), .prom_addr(prom_addr), .prom_data(prom_data),
-    //         .sprite_pen(s_pen), .sprite_color(s_color), .sprite_bank(s_bank),
-    //         .sprite_active(s_active));
-    // wire [7:0] sr, sg, sb; wire s_transp_unused;
-    // pp_palette_sprite u_pal_s (.clk(clk), .prom_wr(prom_wr), .prom_addr(prom_addr),
-    //         .prom_data(prom_data), .color(s_color), .pen(s_pen), .bank128v(s_bank),
-    //         .r(sr), .g(sg), .b(sb), .transparent(s_transp_unused));
-    assign sprite_scan_addr = 11'd0;
-    assign scalelut_addr    = 12'd0;
-    assign sprgfx_addr      = 17'd0;
-    wire s_active = 1'b0;
-    wire [7:0] sr = 8'h00, sg = 8'h00, sb = 8'h00;
+    // RESTORED-2026-07-28: same reason as road above -- also an unverified draft.
+    wire [3:0] s_pen; wire [5:0] s_color; wire s_bank, s_active;
+    pp_sprite_gen u_spr (.clk(clk), .ce(ce), .hpos(hpos), .vpos(vpos),
+            .scan_sprite_addr(sprite_scan_addr), .scan_sprite_dout(sprite_scan_dout),
+            .scalelut_addr(scalelut_addr), .scalelut_data(scalelut_data),
+            .sprgfx_addr(sprgfx_addr), .sprgfx_data(sprgfx_data),
+            .prom_wr(prom_wr), .prom_addr(prom_addr), .prom_data(prom_data),
+            .sprite_pen(s_pen), .sprite_color(s_color), .sprite_bank(s_bank),
+            .sprite_active(s_active));
+    wire [7:0] sr, sg, sb; wire s_transp_unused;
+    pp_palette_sprite u_pal_s (.clk(clk), .prom_wr(prom_wr), .prom_addr(prom_addr),
+            .prom_data(prom_data), .color(s_color), .pen(s_pen), .bank128v(s_bank),
+            .r(sr), .g(sg), .b(sb), .transparent(s_transp_unused));
 
     // ======================= COMPOSITE =====================================
     wire        view_region = (vpos < 9'd128);

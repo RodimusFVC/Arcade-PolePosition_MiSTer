@@ -54,6 +54,7 @@ module pp_tile_layer #(
     input  wire [8:0]  hpos,         // screen X of the pixel output this ce
     input  wire [8:0]  vpos,         // screen Y (view: 0..127; alpha: 0..255)
     input  wire [15:0] hscroll,      // view h-scroll (used iff USE_HSCROLL)
+    input  wire        chacl,        // LS259 q7 (alpha only; tie 1 for view -- polepos_v.cpp:159-166)
 
     // ---- scanout read port (to this layer's buffer in PolePosition_subcpu) --
     output wire [10:0] scan_addr,    // word index (10 bits used; [10]=0)
@@ -126,7 +127,10 @@ module pp_tile_layer #(
                 3'd7: begin                              // latch for next span
                           disp_byte_l <= nxt_byte_l;
                           disp_byte_r <= nxt_byte_r;
-                          disp_color  <= fetch_color;
+                          // polepos_v.cpp:162-166 -- chacl==0 (reset default) forces
+                          // color=0 regardless of VRAM contents; only the alpha
+                          // instance gates on this (view ties chacl=1, always full color).
+                          disp_color  <= chacl ? fetch_color : 6'd0;
                       end
                 default: ; // idle phases
             endcase

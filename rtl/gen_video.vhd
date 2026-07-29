@@ -117,8 +117,24 @@ begin
 		-- DOWN 2 via the visible-window (blank) compares. H start +N = left N (base
 		-- was +1; now +3 = 2 px further left, HW-confirmed V already correct at +0
 		-- = down 2). screen-x grows with hcnt, screen-y with vcnt.
-		if    hcntReg = (448+16+8+3) then hblank <= '1';
-		elsif hcntReg = (192-16+8+3) then hblank <= '0';
+		--
+		-- WIDTH fix (2026-07-28, HW-observed "left side is fat"): this whole
+		-- 448/192 window was inherited unmodified from Xevious (288px: 32 tiles
+		-- centre + 2 extra tile-columns shown on EACH side) -- flagged but never
+		-- resolved in Claude/polepos_video_mapping_2026-07-13.md:302-306, since PP's
+		-- real MAME set_raw() visible width is 256px, not 288. The 2026-07-14 pass
+		-- only retuned the +1->+3 PHASE (both ends together), never the WIDTH. User
+		-- confirmed on real HW the excess 32px is entirely on the LEFT, so trim only
+		-- the deassert (left-edge/start-of-active) side by the full 32px; the assert
+		-- (right edge) point is untouched.
+		--
+		-- PHASE re-tune #unverified (2026-07-28): user suspects the 2026-07-14 +3
+		-- (base was +1, then bumped to +3 = 2px further left) was itself mistuned --
+		-- dropped entirely (N=0) here, both edges together so the 256px width above
+		-- is preserved, net effect vs the immediately-prior state = shift RIGHT 3px.
+		-- HW-untested pending next compile; revert to +3 on both terms if wrong.
+		if    hcntReg = (448+16+8)    then hblank <= '1';
+		elsif hcntReg = (192-16+8+32) then hblank <= '0';
 		end if;
 
 		if    vcntReg = (240+0) then vblank <= '1';

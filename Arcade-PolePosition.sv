@@ -472,44 +472,35 @@ always @(posedge clk_sys) begin
 	tiles_gfx_data <= tiles_rom[tiles_gfx_addr];
 end
 
-// STARTUP-STRIP-2026-07-27: road/scalelut/sprite gfx ROM storage commented
-// out — pp_road_gen/pp_sprite_gen are disabled inside pp_video_composite.sv
-// (see its STARTUP-STRIP-2026-07-27 tags) while chasing the boot hang, so
-// these arrays (105KB combined, sprite_rom alone is 80KB) are dead weight
-// slowing Quartus down for no reason right now. Uncomment together with the
-// pp_video_composite.sv road/sprite blocks to restore.
-// wire [14:0] road_rom_addr;
-// reg  [7:0]  road_rom_data;
-// reg  [7:0]  road_rom [0:20479];    // 0x5000
-// wire        road_wr = ioctl_wr & (ioctl_index == 8'd1) & (ioctl_addr >= 25'h14000) & (ioctl_addr < 25'h19000);
-// always @(posedge clk_sys) begin
-// 	if (road_wr) road_rom[ioctl_addr - 25'h14000] <= ioctl_dout;
-// 	road_rom_data <= road_rom[road_rom_addr];
-// end
-//
-// wire [11:0] scalelut_addr;
-// reg  [7:0]  scalelut_data;
-// reg  [7:0]  scalelut_rom [0:4095];
-// wire        scalelut_wr = ioctl_wr & (ioctl_index == 8'd1) & (ioctl_addr >= 25'h19000) & (ioctl_addr < 25'h1A000);
-// always @(posedge clk_sys) begin
-// 	if (scalelut_wr) scalelut_rom[ioctl_addr[11:0]] <= ioctl_dout;
-// 	scalelut_data <= scalelut_rom[scalelut_addr];
-// end
-//
-// wire [16:0] sprgfx_addr;
-// reg  [7:0]  sprgfx_data;
-// reg  [7:0]  sprite_rom [0:81919];  // 0x14000
-// wire        sprite_wr = ioctl_wr & (ioctl_index == 8'd1) & (ioctl_addr >= 25'h2000) & (ioctl_addr < 25'h14000);
-// always @(posedge clk_sys) begin
-// 	if (sprite_wr) sprite_rom[ioctl_addr - 25'h2000] <= ioctl_dout;
-// 	sprgfx_data <= sprite_rom[sprgfx_addr];
-// end
+// RESTORED-2026-07-28: STARTUP-STRIP-2026-07-27 had these commented out
+// (105KB combined, dead weight while pp_road_gen/pp_sprite_gen were disabled
+// in pp_video_composite.sv). Restored alongside re-enabling those generators.
 wire [14:0] road_rom_addr;
-wire [7:0]  road_rom_data = 8'h00;
+reg  [7:0]  road_rom_data;
+reg  [7:0]  road_rom [0:20479];    // 0x5000
+wire        road_wr = ioctl_wr & (ioctl_index == 8'd1) & (ioctl_addr >= 25'h14000) & (ioctl_addr < 25'h19000);
+always @(posedge clk_sys) begin
+	if (road_wr) road_rom[ioctl_addr - 25'h14000] <= ioctl_dout;
+	road_rom_data <= road_rom[road_rom_addr];
+end
+
 wire [11:0] scalelut_addr;
-wire [7:0]  scalelut_data = 8'h00;
+reg  [7:0]  scalelut_data;
+reg  [7:0]  scalelut_rom [0:4095];
+wire        scalelut_wr = ioctl_wr & (ioctl_index == 8'd1) & (ioctl_addr >= 25'h19000) & (ioctl_addr < 25'h1A000);
+always @(posedge clk_sys) begin
+	if (scalelut_wr) scalelut_rom[ioctl_addr[11:0]] <= ioctl_dout;
+	scalelut_data <= scalelut_rom[scalelut_addr];
+end
+
 wire [16:0] sprgfx_addr;
-wire [7:0]  sprgfx_data = 8'h00;
+reg  [7:0]  sprgfx_data;
+reg  [7:0]  sprite_rom [0:81919];  // 0x14000
+wire        sprite_wr = ioctl_wr & (ioctl_index == 8'd1) & (ioctl_addr >= 25'h2000) & (ioctl_addr < 25'h14000);
+always @(posedge clk_sys) begin
+	if (sprite_wr) sprite_rom[ioctl_addr - 25'h2000] <= ioctl_dout;
+	sprgfx_data <= sprite_rom[sprgfx_addr];
+end
 
 // Palette PROMs — ioctl INDEX 2, offset 0x000-0xFFF (R@0x000 G@0x100 B@0x200
 // alpha@0x300 view@0x400 vpos-mod@0x500/600/700 road@0x800 sprite@0xC00). Each

@@ -834,6 +834,13 @@ module z8002
                                   // existing 9-bit (add8) / 17-bit (sum17/dif17) carry
                                   // scratch, one level narrower.
 
+    // ---- shared register-file writeback bus (see the writeback block at the
+    //      very end of the main always block for the rationale) ----
+    reg        rwb0_we,  rwb1_we,  rwb2_we,  rwb3_we;
+    reg [3:0]  rwb0_idx, rwb1_idx, rwb2_idx, rwb3_idx;
+    reg [15:0] rwb0_val, rwb1_val, rwb2_val, rwb3_val;
+    reg [1:0]  rwb0_be,  rwb1_be,  rwb2_be,  rwb3_be;   // {high byte en, low byte en}
+
     integer i;
     always @(posedge clk) begin
         if (!reset_n) begin
@@ -857,6 +864,11 @@ module z8002
             // set while the line is held low; cleared exactly on accept (S_NVI_RDPC) unless
             // still held low that same cycle, in which case it correctly re-latches.
             if (!nvi_n) nvi_pending <= 1'b1;
+            // writeback-bus defaults: no channel writes unless a state arm claims one
+            rwb0_we=1'b0; rwb0_idx=4'd0; rwb0_val=16'h0000; rwb0_be=2'b11;
+            rwb1_we=1'b0; rwb1_idx=4'd0; rwb1_val=16'h0000; rwb1_be=2'b11;
+            rwb2_we=1'b0; rwb2_idx=4'd0; rwb2_val=16'h0000; rwb2_be=2'b11;
+            rwb3_we=1'b0; rwb3_idx=4'd0; rwb3_val=16'h0000; rwb3_be=2'b11;
             case (state)
             S_RST_FCW: begin fcw<=din; state<=S_RST_PC; end
             S_RST_PC:  begin pc <=din; state<=S_FETCH0; end
@@ -886,7 +898,7 @@ module z8002
                 ir <= din;
                 // ---- CLR rd (0x8Dd8, no flags) ----
                 if (din[15:8]==8'h8D && din[3:0]==4'h8) begin
-                    R[din[7:4]]<=16'h0000; pc<=pc2; retire<=1'b1;
+                    rwb0_we=1'b1; rwb0_idx=din[7:4]; rwb0_val=16'h0000; pc<=pc2; retire<=1'b1;
                 end
                 // ---- LD rd,#imm16 (0x210d) / LD rd,@rs (0x21, src!=0) ----
                 else if (din[15:8]==8'h21) begin
@@ -1011,7 +1023,7 @@ module z8002
                 else if (din[15:8]==8'hAB) begin
                     incn=din[3:0]+4'd1; a16=R[din[7:4]]; res16=a16-{12'd0,incn};
                     v=a16[15] & ~res16[15];
-                    R[din[7:4]]<=res16;
+                    rwb0_we=1'b1; rwb0_idx=din[7:4]; rwb0_val=res16;
                     fcw<=(fcw & ~(MZ|MS|MV)) | ((res16==0)?MZ:0)|(res16[15]?MS:0)|(v?MV:0);
                     pc<=pc2; retire<=1'b1;
                 end
@@ -1021,8 +1033,7 @@ module z8002
                     dbyte = din[7] ? R[din[6:4]][7:0] : R[din[6:4]][15:8];
                     add8 = {1'b0,dbyte} - {5'd0,incn};
                     v = dbyte[7] & ~add8[7];
-                    if (din[7]) R[din[6:4]][7:0]<=add8[7:0];
-                    else        R[din[6:4]][15:8]<=add8[7:0];
+                    rwb0_we=1'b1; rwb0_idx={1'b0,din[6:4]}; rwb0_val={2{add8[7:0]}}; rwb0_be=din[7]?2'b01:2'b10;
                     fcw<=(fcw & ~(MZ|MS|MV)) | ((add8[7:0]==0)?MZ:0)|(add8[7]?MS:0)|(v?MV:0);
                     pc<=pc2; retire<=1'b1;
                 end
@@ -1030,7 +1041,7 @@ module z8002
                 else if (din[15:8]==8'hA9) begin
                     incn=din[3:0]+4'd1; incw_sum={1'b0,R[din[7:4]]}+{13'd0,incn};
                     v=(~R[din[7:4]][15]) & incw_sum[15];
-                    R[din[7:4]]<=incw_sum[15:0];
+                    rwb0_we=1'b1; rwb0_idx=din[7:4]; rwb0_val=incw_sum[15:0];
                     fcw<=(fcw & ~(MZ|MS|MV)) | ((incw_sum[15:0]==0)?MZ:0)
                         | (incw_sum[15]?MS:0) | (v?MV:0);
                     pc<=pc2; retire<=1'b1;
@@ -1041,8 +1052,7 @@ module z8002
                     dbyte = din[7] ? R[din[6:4]][7:0] : R[din[6:4]][15:8];
                     incb_sum={1'b0,dbyte}+{5'd0,incn};
                     v=(~dbyte[7]) & incb_sum[7];
-                    if (din[7]) R[din[6:4]][7:0]<=incb_sum[7:0];
-                    else        R[din[6:4]][15:8]<=incb_sum[7:0];
+                    rwb0_we=1'b1; rwb0_idx={1'b0,din[6:4]}; rwb0_val={2{incb_sum[7:0]}}; rwb0_be=din[7]?2'b01:2'b10;
                     fcw<=(fcw & ~(MZ|MS|MV)) | ((incb_sum[7:0]==0)?MZ:0)
                         | (incb_sum[7]?MS:0) | (v?MV:0);
                     pc<=pc2; retire<=1'b1;
@@ -1051,11 +1061,11 @@ module z8002
                 else if (din[15:12]==4'hF) begin
                     disp2={8'd0,din[6:0],1'b0};
                     if (din[7]) begin
-                        R[din[11:8]]<=R[din[11:8]]-16'd1;
+                        rwb0_we=1'b1; rwb0_idx=din[11:8]; rwb0_val=R[din[11:8]]-16'd1;
                         pc<=(R[din[11:8]]-16'd1!=0) ? (pc2-disp2) : pc2;
                     end else begin
-                        if (din[11]) R[din[10:8]][7:0] <=R[din[10:8]][7:0] -8'd1;
-                        else         R[din[10:8]][15:8]<=R[din[10:8]][15:8]-8'd1;
+                        rwb0_we=1'b1; rwb0_idx={1'b0,din[10:8]}; rwb0_be=din[11]?2'b01:2'b10;
+                        rwb0_val={2{(din[11] ? R[din[10:8]][7:0] : R[din[10:8]][15:8]) - 8'd1}};
                         pc<=pc2;
                     end
                     retire<=1'b1;
@@ -1088,14 +1098,14 @@ module z8002
                 else if (din[15:8]==8'h7D && din[3]==1'b0) begin
                     pc<=pc2; retire<=1'b1;
                     case (din[2:0])
-                        3'd2: R[din[7:4]]<=fcw;    // FCW
-                        3'd5: R[din[7:4]]<=psap;   // PSAPOFF
+                        3'd2: begin rwb0_we=1'b1; rwb0_idx=din[7:4]; rwb0_val=fcw;  end // FCW
+                        3'd5: begin rwb0_we=1'b1; rwb0_idx=din[7:4]; rwb0_val=psap; end // PSAPOFF
                         // 3=REFRESH: DRAM-refresh counter - no DRAM in this FPGA/BRAM system,
                         // so there is nothing to read back; return 0. 7=NSPOFF / 4,6=seg
                         // (Z8001-only): no effect in a non-segmented single hardware-SP model.
                         // Explicit documented default (NOT a silent drop) - the only reachable
                         // real use is the boot-time WRITE below (pp_sub @0x0012 ldctl refresh).
-                        default: R[din[7:4]]<=16'h0000;
+                        default: begin rwb0_we=1'b1; rwb0_idx=din[7:4]; rwb0_val=16'h0000; end
                     endcase
                 end
                 // ---- LDCTL ctrl,rs (0x7D_1ccc, NIB3 bit3=1): write Rs -> ctrl reg ----
@@ -1181,8 +1191,8 @@ module z8002
                 // ---- LDL RRd,RRs (0x94, full range) : MAME Z94_ssss_dddd ----
                 // single-cycle reg-pair move, no memory access. No flags.
                 else if (din[15:8]==8'h94) begin
-                    R[{din[3:1],1'b0}]      <= R[{din[6:4],1'b0}];
-                    R[{din[3:1],1'b0}+4'd1] <= R[{din[6:4],1'b0}+4'd1];
+                    rwb0_we=1'b1; rwb0_idx={din[3:1],1'b0};      rwb0_val=R[{din[6:4],1'b0}];
+                    rwb1_we=1'b1; rwb1_idx={din[3:1],1'b0}+4'd1; rwb1_val=R[{din[6:4],1'b0}+4'd1];
                     pc<=pc2; retire<=1'b1;
                 end
                 // ---- LDL RRd,#imm32 (0x14, NIB2=0) : MAME Z14_0000_dddd_imm32 ----
@@ -1526,7 +1536,7 @@ module z8002
                 // matching the queue count exactly); comb/negb/tsetb/ldctlb are unused, skipped.
                 // Single-cycle, register-only -- no memory access.
                 else if (din[15:8]==8'h8C && din[3:0]==4'h8) begin
-                    if (din[7]) R[din[6:4]][7:0]<=8'h00; else R[din[6:4]][15:8]<=8'h00;
+                    rwb0_we=1'b1; rwb0_idx={1'b0,din[6:4]}; rwb0_val=16'h0000; rwb0_be=din[7]?2'b01:2'b10;
                     pc<=pc2; retire<=1'b1;
                 end
                 // ---- TESTB rbd (0x8Cd4, NIB1=4) : MAME Z8C_dddd_0100, flags -ZSP-- ----
@@ -1545,7 +1555,7 @@ module z8002
                     res8 = {dbyte[6:0], dbyte[7]};
                     if (din[1]) res8 = {res8[6:0], res8[7]};
                     v = res8[7] ^ dbyte[7];
-                    if (din[7]) R[din[6:4]][7:0]<=res8; else R[din[6:4]][15:8]<=res8;
+                    rwb0_we=1'b1; rwb0_idx={1'b0,din[6:4]}; rwb0_val={2{res8}}; rwb0_be=din[7]?2'b01:2'b10;
                     fcw<=(fcw & ~(MC|MZ|MS|MV)) | (res8[0]?MC:0)|((res8==8'h00)?MZ:0)
                        | (res8[7]?MS:0)|(v?MV:0);
                     pc<=pc2; retire<=1'b1;
@@ -1560,7 +1570,7 @@ module z8002
                     res8 = {dbyte[0], dbyte[7:1]};
                     if (din[1]) res8 = {res8[0], res8[7:1]};
                     v = res8[7] ^ dbyte[7];
-                    if (din[7]) R[din[6:4]][7:0]<=res8; else R[din[6:4]][15:8]<=res8;
+                    rwb0_we=1'b1; rwb0_idx={1'b0,din[6:4]}; rwb0_val={2{res8}}; rwb0_be=din[7]?2'b01:2'b10;
                     fcw<=(fcw & ~(MC|MZ|MS|MV)) | ((res8==8'h00)?MZ:0)
                        | ((res8!=8'h00 && res8[7])?(MC|MS):0) | (v?MV:0);
                     pc<=pc2; retire<=1'b1;
@@ -1580,7 +1590,7 @@ module z8002
                         res8 = {dbyte[0], res8[7:1]};
                     end
                     v = res8[7] ^ dbyte[7];
-                    if (din[7]) R[din[6:4]][7:0]<=res8; else R[din[6:4]][15:8]<=res8;
+                    rwb0_we=1'b1; rwb0_idx={1'b0,din[6:4]}; rwb0_val={2{res8}}; rwb0_be=din[7]?2'b01:2'b10;
                     fcw<=(fcw & ~(MC|MZ|MS|MV)) | (cbit?MC:0)|((res8==8'h00)?MZ:0)
                        | (res8[7]?MS:0)|(v?MV:0);
                     pc<=pc2; retire<=1'b1;
@@ -1651,7 +1661,7 @@ module z8002
                 else if (din[15:8]==8'h8D && din[3:0]==4'h2) begin
                     res16 = 16'h0000 - R[din[7:4]];
                     v = (res16==16'h8000);
-                    R[din[7:4]]<=res16;
+                    rwb0_we=1'b1; rwb0_idx=din[7:4]; rwb0_val=res16;
                     fcw<=(fcw & ~(MC|MZ|MS|MV))
                        | ((res16!=16'h0000)?MC:0)|((res16==16'h0000)?MZ:0)|(res16[15]?MS:0)|(v?MV:0);
                     pc<=pc2; retire<=1'b1;
@@ -1660,7 +1670,7 @@ module z8002
                 // only ~6 but zero marginal cost (same 0x8D dispatch as NEG/CLR above). ----
                 else if (din[15:8]==8'h8D && din[3:0]==4'h0) begin
                     res16 = ~R[din[7:4]];
-                    R[din[7:4]]<=res16;
+                    rwb0_we=1'b1; rwb0_idx=din[7:4]; rwb0_val=res16;
                     fcw<=(fcw & ~(MZ|MS)) | ((res16==16'h0000)?MZ:0)|(res16[15]?MS:0);
                     pc<=pc2; retire<=1'b1;
                 end
@@ -1670,7 +1680,7 @@ module z8002
                 // RW(dst)=(int16_t)(int8_t)RW(dst) operating on the full register). Real usage
                 // 7. ----
                 else if (din[15:8]==8'hB1 && din[3:0]==4'h0) begin
-                    R[din[7:4]] <= {{8{R[din[7:4]][7]}}, R[din[7:4]][7:0]};
+                    rwb0_we=1'b1; rwb0_idx=din[7:4]; rwb0_val={{8{R[din[7:4]][7]}}, R[din[7:4]][7:0]};
                     pc<=pc2; retire<=1'b1;
                 end
                 // ==== BATCH 8: DAB rbd (0xB0d0, NIB0=0) : MAME ZB0_dddd_0000 "dab rbd",
@@ -1685,8 +1695,7 @@ module z8002
                     dab_byte = din[7] ? R[din[6:4]][7:0] : R[din[6:4]][15:8];
                     dab_idx  = {fcw[FDA], fcw[FH], fcw[FC], dab_byte};
                     dab_res  = dab_rom[dab_idx];
-                    if (din[7]) R[din[6:4]][7:0]  <= dab_res[7:0];
-                    else        R[din[6:4]][15:8] <= dab_res[7:0];
+                    rwb0_we=1'b1; rwb0_idx={1'b0,din[6:4]}; rwb0_val={2{dab_res[7:0]}}; rwb0_be=din[7]?2'b01:2'b10;
                     fcw<=(fcw & ~(MC|MZ|MS)) | (dab_res[8]?MC:0) | ((dab_res[7:0]==8'h00)?MZ:0) | (dab_res[7]?MS:0);
                     pc<=pc2; retire<=1'b1;
                 end
@@ -1696,7 +1705,7 @@ module z8002
                 // write). Pair-base = {din[7:5],1'b0} (bit0-of-nibble truncation, same
                 // derivation already used for the ADDL/SUBL reg-reg forms). Real usage 9. ----
                 else if (din[15:8]==8'hB1 && din[3:0]==4'hA) begin
-                    R[{din[7:5],1'b0}] <= {16{R[{din[7:5],1'b0}+4'd1][15]}};
+                    rwb0_we=1'b1; rwb0_idx={din[7:5],1'b0}; rwb0_val={16{R[{din[7:5],1'b0}+4'd1][15]}};
                     pc<=pc2; retire<=1'b1;
                 end
                 // ---- RESB @Rd,#imm4 (0x2210-0x22FF, NIB2=dst!=0) : MAME Z22_ddN0_imm4 "resb
@@ -1726,10 +1735,8 @@ module z8002
                 // OLD value combinationally (non-blocking assignment), so dst==src is a
                 // correct (harmless) no-op swap. Real usage only 2 but zero marginal states. ----
                 else if (din[15:8]==8'hAC) begin
-                    if (din[3]) R[din[2:0]][7:0]  <= din[7] ? R[din[6:4]][7:0] : R[din[6:4]][15:8];
-                    else        R[din[2:0]][15:8] <= din[7] ? R[din[6:4]][7:0] : R[din[6:4]][15:8];
-                    if (din[7]) R[din[6:4]][7:0]   <= din[3] ? R[din[2:0]][7:0] : R[din[2:0]][15:8];
-                    else        R[din[6:4]][15:8]  <= din[3] ? R[din[2:0]][7:0] : R[din[2:0]][15:8];
+                    rwb0_we=1'b1; rwb0_idx={1'b0,din[2:0]}; rwb0_be=din[3]?2'b01:2'b10; rwb0_val={2{din[7] ? R[din[6:4]][7:0] : R[din[6:4]][15:8]}};
+                    rwb1_we=1'b1; rwb1_idx={1'b0,din[6:4]}; rwb1_be=din[7]?2'b01:2'b10; rwb1_val={2{din[3] ? R[din[2:0]][7:0] : R[din[2:0]][15:8]}};
                     pc<=pc2; retire<=1'b1;
                 end
                 // ---- ADCB rd,rs (0xB4, full range) : MAME ZB4_ssss_dddd, flags CZSVDH (DA
@@ -1743,7 +1750,7 @@ module z8002
                     add8 = {1'b0,dbyte} + {1'b0,operand_b} + {8'd0,fcw[FC]};
                     nibc = {1'b0,dbyte[3:0]} + {1'b0,operand_b[3:0]} + {4'd0,fcw[FC]};
                     v = (operand_b[7]&dbyte[7]&~add8[7])|(~operand_b[7]&~dbyte[7]&add8[7]);
-                    if (din[3]) R[din[2:0]][7:0]<=add8[7:0]; else R[din[2:0]][15:8]<=add8[7:0];
+                    rwb0_we=1'b1; rwb0_idx={1'b0,din[2:0]}; rwb0_val={2{add8[7:0]}}; rwb0_be=din[3]?2'b01:2'b10;
                     fcw<=(fcw & ~(MC|MZ|MS|MV|MDA|MH))
                        | (add8[8]?MC:0)|((add8[7:0]==0)?MZ:0)|(add8[7]?MS:0)|(v?MV:0)|(nibc[4]?MH:0);
                     pc<=pc2; retire<=1'b1;
@@ -1755,7 +1762,7 @@ module z8002
                     a16 = R[din[3:0]];
                     sum17 = {1'b0,a16} + {1'b0,R[din[7:4]]} + {16'd0,fcw[FC]};
                     v = (~a16[15]&~R[din[7:4]][15]&sum17[15])|(a16[15]&R[din[7:4]][15]&~sum17[15]);
-                    R[din[3:0]]<=sum17[15:0];
+                    rwb0_we=1'b1; rwb0_idx=din[3:0]; rwb0_val=sum17[15:0];
                     fcw<=(fcw & ~(MC|MZ|MS|MV))
                        | (sum17[16]?MC:0)|((sum17[15:0]==0)?MZ:0)|(sum17[15]?MS:0)|(v?MV:0);
                     pc<=pc2; retire<=1'b1;
@@ -1770,7 +1777,7 @@ module z8002
                     add8 = {1'b0,dbyte} - {1'b0,operand_b} - {8'd0,fcw[FC]};
                     nibc = {1'b0,dbyte[3:0]} - {1'b0,operand_b[3:0]} - {4'd0,fcw[FC]};
                     v = (~operand_b[7]&dbyte[7]&~add8[7])|(operand_b[7]&~dbyte[7]&add8[7]);
-                    if (din[3]) R[din[2:0]][7:0]<=add8[7:0]; else R[din[2:0]][15:8]<=add8[7:0];
+                    rwb0_we=1'b1; rwb0_idx={1'b0,din[2:0]}; rwb0_val={2{add8[7:0]}}; rwb0_be=din[3]?2'b01:2'b10;
                     fcw<=(fcw & ~(MC|MZ|MS|MV|MDA|MH))
                        | (add8[8]?MC:0)|((add8[7:0]==0)?MZ:0)|(add8[7]?MS:0)|(v?MV:0)|MDA|(nibc[4]?MH:0);
                     pc<=pc2; retire<=1'b1;
@@ -1781,7 +1788,7 @@ module z8002
                     a16 = R[din[3:0]];
                     dif17 = {1'b0,a16} - {1'b0,R[din[7:4]]} - {16'd0,fcw[FC]};
                     v = (~R[din[7:4]][15]&a16[15]&~dif17[15])|(R[din[7:4]][15]&~a16[15]&dif17[15]);
-                    R[din[3:0]]<=dif17[15:0];
+                    rwb0_we=1'b1; rwb0_idx=din[3:0]; rwb0_val=dif17[15:0];
                     fcw<=(fcw & ~(MC|MZ|MS|MV))
                        | (dif17[16]?MC:0)|((dif17[15:0]==0)?MZ:0)|(dif17[15]?MS:0)|(v?MV:0);
                     pc<=pc2; retire<=1'b1;
@@ -1871,7 +1878,8 @@ module z8002
                 // the OLD value combinationally (non-blocking assignment), so dst==src is a
                 // correct (harmless) no-op swap, mirroring the existing EXB reg-reg (0xAC). ----
                 else if (din[15:8]==8'hAD) begin
-                    R[din[3:0]]<=R[din[7:4]]; R[din[7:4]]<=R[din[3:0]];
+                    rwb0_we=1'b1; rwb0_idx=din[3:0]; rwb0_val=R[din[7:4]];
+                    rwb1_we=1'b1; rwb1_idx=din[7:4]; rwb1_val=R[din[3:0]];
                     pc<=pc2; retire<=1'b1;
                 end
                 // ==== BATCH 5 PART 2: register-indirect @Rd simple family (0x0C/0x0D) =====
@@ -2029,7 +2037,7 @@ module z8002
                 else if (din[15:8]==8'h8C && din[3:0]==4'h0) begin
                     dbyte = din[7] ? R[din[6:4]][7:0] : R[din[6:4]][15:8];
                     res8 = ~dbyte; p=(~^res8);
-                    if (din[7]) R[din[6:4]][7:0]<=res8; else R[din[6:4]][15:8]<=res8;
+                    rwb0_we=1'b1; rwb0_idx={1'b0,din[6:4]}; rwb0_val={2{res8}}; rwb0_be=din[7]?2'b01:2'b10;
                     fcw<=(fcw & ~(MZ|MS|MV)) | ((res8==8'h00)?MZ:0)|(res8[7]?MS:0)|(p?MV:0);
                     pc<=pc2; retire<=1'b1;
                 end
@@ -2038,7 +2046,7 @@ module z8002
                 else if (din[15:8]==8'h8C && din[3:0]==4'h2) begin
                     dbyte = din[7] ? R[din[6:4]][7:0] : R[din[6:4]][15:8];
                     res8 = 8'h00 - dbyte; v=(res8==8'h80);
-                    if (din[7]) R[din[6:4]][7:0]<=res8; else R[din[6:4]][15:8]<=res8;
+                    rwb0_we=1'b1; rwb0_idx={1'b0,din[6:4]}; rwb0_val={2{res8}}; rwb0_be=din[7]?2'b01:2'b10;
                     fcw<=(fcw & ~(MC|MZ|MS|MV)) | ((res8!=8'h00)?MC:0)|((res8==8'h00)?MZ:0)|(res8[7]?MS:0)|(v?MV:0);
                     pc<=pc2; retire<=1'b1;
                 end
@@ -2049,7 +2057,7 @@ module z8002
                 else if (din[15:8]==8'h8C && din[3:0]==4'h6) begin
                     dbyte = din[7] ? R[din[6:4]][7:0] : R[din[6:4]][15:8];
                     fcw<=(fcw & ~MS) | (dbyte[7]?MS:0);
-                    if (din[7]) R[din[6:4]][7:0]<=8'hFF; else R[din[6:4]][15:8]<=8'hFF;
+                    rwb0_we=1'b1; rwb0_idx={1'b0,din[6:4]}; rwb0_val=16'hFFFF; rwb0_be=din[7]?2'b01:2'b10;
                     pc<=pc2; retire<=1'b1;
                 end
                 // ---- LDCTLB rbd,flags (0x8Cd1) : MAME Z8C_dddd_0001 "ldctlb rbd,flags" --
@@ -2058,7 +2066,7 @@ module z8002
                 // "flags CZSVDH" describes which bits get READ, not new flags computed --
                 // fcw itself is untouched by this arm. ----
                 else if (din[15:8]==8'h8C && din[3:0]==4'h1) begin
-                    if (din[7]) R[din[6:4]][7:0]<=(fcw[7:0] & 8'hFC); else R[din[6:4]][15:8]<=(fcw[7:0] & 8'hFC);
+                    rwb0_we=1'b1; rwb0_idx={1'b0,din[6:4]}; rwb0_val={2{(fcw[7:0] & 8'hFC)}}; rwb0_be=din[7]?2'b01:2'b10;
                     pc<=pc2; retire<=1'b1;
                 end
                 // ---- LDCTLB flags,rbd (0x8Cd9) : MAME Z8C_dddd_1001 "ldctlb flags,rbd" --
@@ -2089,7 +2097,7 @@ module z8002
                 // report). ----
                 else if (din[15:8]==8'h8D && din[3:0]==4'h6) begin
                     fcw<=(fcw & ~MS) | (R[din[7:4]][15]?MS:0);
-                    R[din[7:4]]<=16'hFFFF;
+                    rwb0_we=1'b1; rwb0_idx=din[7:4]; rwb0_val=16'hFFFF;
                     pc<=pc2; retire<=1'b1;
                 end
                 // ---- SETFLG/RESFLG/COMFLG imm4 (0x8D_imm4_0001/0011/0101, NIB0=1/3/5) :
@@ -2127,21 +2135,21 @@ module z8002
                 else if (din[15:8]==8'hA2) begin // RESB rbd,imm4
                     dbyte = din[7] ? R[din[6:4]][7:0] : R[din[6:4]][15:8];
                     res8 = dbyte & ~(8'h01<<din[3:0]);
-                    if (din[7]) R[din[6:4]][7:0]<=res8; else R[din[6:4]][15:8]<=res8;
+                    rwb0_we=1'b1; rwb0_idx={1'b0,din[6:4]}; rwb0_val={2{res8}}; rwb0_be=din[7]?2'b01:2'b10;
                     pc<=pc2; retire<=1'b1;
                 end
                 else if (din[15:8]==8'hA3) begin // RES rd,imm4
-                    R[din[7:4]] <= R[din[7:4]] & ~(16'h0001<<din[3:0]);
+                    rwb0_we=1'b1; rwb0_idx=din[7:4]; rwb0_val=R[din[7:4]] & ~(16'h0001<<din[3:0]);
                     pc<=pc2; retire<=1'b1;
                 end
                 else if (din[15:8]==8'hA4) begin // SETB rbd,imm4
                     dbyte = din[7] ? R[din[6:4]][7:0] : R[din[6:4]][15:8];
                     res8 = dbyte | (8'h01<<din[3:0]);
-                    if (din[7]) R[din[6:4]][7:0]<=res8; else R[din[6:4]][15:8]<=res8;
+                    rwb0_we=1'b1; rwb0_idx={1'b0,din[6:4]}; rwb0_val={2{res8}}; rwb0_be=din[7]?2'b01:2'b10;
                     pc<=pc2; retire<=1'b1;
                 end
                 else if (din[15:8]==8'hA5) begin // SET rd,imm4
-                    R[din[7:4]] <= R[din[7:4]] | (16'h0001<<din[3:0]);
+                    rwb0_we=1'b1; rwb0_idx=din[7:4]; rwb0_val=R[din[7:4]] | (16'h0001<<din[3:0]);
                     pc<=pc2; retire<=1'b1;
                 end
                 else if (din[15:8]==8'hA6) begin // BITB rbd,imm4
@@ -2161,18 +2169,18 @@ module z8002
                 else if (din[15:8]==8'hAE) begin
                     dbyte = din[7] ? R[din[6:4]][7:0] : R[din[6:4]][15:8];
                     res8 = {dbyte[7:1], cc_true(din[3:0],fcw[FC],fcw[FZ],fcw[FS],fcw[FV])};
-                    if (din[7]) R[din[6:4]][7:0]<=res8; else R[din[6:4]][15:8]<=res8;
+                    rwb0_we=1'b1; rwb0_idx={1'b0,din[6:4]}; rwb0_val={2{res8}}; rwb0_be=din[7]?2'b01:2'b10;
                     pc<=pc2; retire<=1'b1;
                 end
                 else if (din[15:8]==8'hAF) begin
-                    R[din[7:4]] <= {R[din[7:4]][15:1], cc_true(din[3:0],fcw[FC],fcw[FZ],fcw[FS],fcw[FV])};
+                    rwb0_we=1'b1; rwb0_idx=din[7:4]; rwb0_val={R[din[7:4]][15:1], cc_true(din[3:0],fcw[FC],fcw[FZ],fcw[FS],fcw[FV])};
                     pc<=pc2; retire<=1'b1;
                 end
                 // ---- LDK rd,imm4 (0xBD, full range) : MAME ZBD_dddd_imm4 "ldk rd,imm4",
                 // flags ------ -- zero-extended 4-bit immediate load, cheapest possible
                 // instruction (no memory access, no flags, single word). ----
                 else if (din[15:8]==8'hBD) begin
-                    R[din[7:4]] <= {12'h000, din[3:0]};
+                    rwb0_we=1'b1; rwb0_idx=din[7:4]; rwb0_val={12'h000, din[3:0]};
                     pc<=pc2; retire<=1'b1;
                 end
                 // ---- RLDB rba,rbb (0xBC, full range) : MAME ZBC_aaaa_bbbb "rldb rba,rbb"
@@ -2187,8 +2195,8 @@ module z8002
                     dbyte     = din[7] ? R[din[6:4]][7:0] : R[din[6:4]][15:8];  // old a
                     operand_b = din[3] ? R[din[2:0]][7:0] : R[din[2:0]][15:8];  // old b (=tmp)
                     res8 = {operand_b[3:0], dbyte[7:4]};                        // new a
-                    if (din[7]) R[din[6:4]][7:0]<=res8; else R[din[6:4]][15:8]<=res8;
-                    if (din[3]) R[din[2:0]][7:0]<=operand_b; else R[din[2:0]][15:8]<=operand_b; // new b = old b
+                    rwb0_we=1'b1; rwb0_idx={1'b0,din[6:4]}; rwb0_val={2{res8}}; rwb0_be=din[7]?2'b01:2'b10;
+                    rwb1_we=1'b1; rwb1_idx={1'b0,din[2:0]}; rwb1_val={2{operand_b}}; rwb1_be=din[3]?2'b01:2'b10; // new b = old b
                     fcw<=(fcw & ~MZ) | ((operand_b==8'h00)?MZ:0);
                     pc<=pc2; retire<=1'b1;
                 end
@@ -2202,9 +2210,9 @@ module z8002
                     dbyte     = din[7] ? R[din[6:4]][7:0] : R[din[6:4]][15:8];  // old a (=tmp)
                     operand_b = din[3] ? R[din[2:0]][7:0] : R[din[2:0]][15:8];  // old b
                     res8 = {dbyte[3:0], operand_b[3:0]};                        // new a
-                    if (din[7]) R[din[6:4]][7:0]<=res8; else R[din[6:4]][15:8]<=res8;
+                    rwb0_we=1'b1; rwb0_idx={1'b0,din[6:4]}; rwb0_val={2{res8}}; rwb0_be=din[7]?2'b01:2'b10;
                     res8 = {operand_b[7:4], dbyte[7:4]};                        // new b
-                    if (din[3]) R[din[2:0]][7:0]<=res8; else R[din[2:0]][15:8]<=res8;
+                    rwb1_we=1'b1; rwb1_idx={1'b0,din[2:0]}; rwb1_val={2{res8}}; rwb1_be=din[3]?2'b01:2'b10;
                     fcw<=(fcw & ~MZ) | ((res8==8'h00)?MZ:0);
                     pc<=pc2; retire<=1'b1;
                 end
@@ -2215,8 +2223,8 @@ module z8002
                 // low-two-bits-truncation derivation (header comment). ----
                 else if (din[15:8]==8'hB1 && din[3:0]==4'h7) begin
                     qbase = {din[7:6],2'b00};
-                    R[qbase]      <= {16{R[qbase+4'd2][15]}};
-                    R[qbase+4'd1] <= {16{R[qbase+4'd2][15]}};
+                    rwb0_we=1'b1; rwb0_idx=qbase;      rwb0_val={16{R[qbase+4'd2][15]}};
+                    rwb1_we=1'b1; rwb1_idx=qbase+4'd1; rwb1_val={16{R[qbase+4'd2][15]}};
                     pc<=pc2; retire<=1'b1;
                 end
                 // ---- LDB rd,imm8 short form (0xC000-0xCFFF, full range) : MAME
@@ -2224,7 +2232,7 @@ module z8002
                 // imm8=din[7:0] (the SAME opcode word's low byte -- single-word
                 // instruction, no second-word fetch at all). flags ------. ----
                 else if (din[15:12]==4'hC) begin
-                    if (din[11]) R[din[10:8]][7:0]<=din[7:0]; else R[din[10:8]][15:8]<=din[7:0];
+                    rwb0_we=1'b1; rwb0_idx={1'b0,din[10:8]}; rwb0_val={2{din[7:0]}}; rwb0_be=din[11]?2'b01:2'b10;
                     pc<=pc2; retire<=1'b1;
                 end
                 // ---- catch-all trap. INTENTIONALLY-UNIMPLEMENTED families land here (see
@@ -2274,7 +2282,7 @@ module z8002
                     default: begin res16=a16^operand; z=(res16==0); s=res16[15];  // XOR
                          fmask=MZ|MS; fval=(z?MZ:0)|(s?MS:0); end
                 endcase
-                if (wb) R[dst]<=res16;
+                if (wb) begin rwb0_we=1'b1; rwb0_idx=dst; rwb0_val=res16; end
                 fcw<=(fcw & ~fmask) | fval;
                 retire<=1'b1; state<=S_FETCH0;
             end
@@ -2293,7 +2301,7 @@ module z8002
             end
             S_DA_IMM: begin operand<=din; pc<=pc+16'd2; state<=S_DA_WR; end
             S_DA_RD:  begin
-                if (daop==DA_LDR) R[dst]<=din;
+                if (daop==DA_LDR) begin rwb0_we=1'b1; rwb0_idx=dst; rwb0_val=din; end
                 // BATCH 8: CP mem,#imm (indexed only, DA_CPI) -- same dif17/CZSV formula as
                 // the existing S_ALU SUB/CP case, `din`=mem value just read, `operand`=imm16
                 // already staged by S_DAX_IMM. Discard-only compare, no register write-back.
@@ -2334,7 +2342,7 @@ module z8002
                     cbit  = (cnt!=0) ? (((a16 << (cnt-1)) & 16'h8000)!=0) : 1'b0;
                 end
                 z=(res16==0); s=res16[15];
-                R[dst]<=res16;
+                rwb0_we=1'b1; rwb0_idx=dst; rwb0_val=res16;
                 fcw<=(fcw & ~(MC|MZ|MS)) | (cbit?MC:0)|(z?MZ:0)|(s?MS:0);
                 pc<=pc+16'd2; retire<=1'b1; state<=S_FETCH0;
             end
@@ -2358,7 +2366,7 @@ module z8002
                     v     = (res16[15]!=a16[15]);
                 end
                 z=(res16==0); s=res16[15];
-                R[dst]<=res16;
+                rwb0_we=1'b1; rwb0_idx=dst; rwb0_val=res16;
                 fcw<=(fcw & ~(MC|MZ|MS|MV)) | (cbit?MC:0)|(z?MZ:0)|(s?MS:0)|(v?MV:0);
                 pc<=pc+16'd2; retire<=1'b1; state<=S_FETCH0;
             end
@@ -2381,8 +2389,8 @@ module z8002
                     v     = (res32[31]!=a32[31]);
                 end
                 z=(res32==0); s=res32[31];
-                R[{dst[3:1],1'b0}]      <= res32[31:16];
-                R[{dst[3:1],1'b0}+4'd1] <= res32[15:0];
+                rwb0_we=1'b1; rwb0_idx={dst[3:1],1'b0};      rwb0_val=res32[31:16];
+                rwb1_we=1'b1; rwb1_idx={dst[3:1],1'b0}+4'd1; rwb1_val=res32[15:0];
                 fcw<=(fcw & ~(MC|MZ|MS|MV)) | (cbit?MC:0)|(z?MZ:0)|(s?MS:0)|(v?MV:0);
                 pc<=pc+16'd2; retire<=1'b1; state<=S_FETCH0;
             end
@@ -2400,8 +2408,8 @@ module z8002
                     cbit  = (cnt!=0) ? (((a32 << (cnt-1)) & 32'h80000000)!=0) : 1'b0;
                 end
                 z=(res32==0); s=res32[31];
-                R[{dst[3:1],1'b0}]      <= res32[31:16];
-                R[{dst[3:1],1'b0}+4'd1] <= res32[15:0];
+                rwb0_we=1'b1; rwb0_idx={dst[3:1],1'b0};      rwb0_val=res32[31:16];
+                rwb1_we=1'b1; rwb1_idx={dst[3:1],1'b0}+4'd1; rwb1_val=res32[15:0];
                 fcw<=(fcw & ~(MC|MZ|MS)) | (cbit?MC:0)|(z?MZ:0)|(s?MS:0);
                 pc<=pc+16'd2; retire<=1'b1; state<=S_FETCH0;
             end
@@ -2412,7 +2420,7 @@ module z8002
             // PC-relative resolution needed off-segment), NOT a pointer to dereference. ----
             S_LDA76_FETCH: begin operand<=din; pc<=pc+16'd2; state<=S_LDA76_GO; end
             S_LDA76_GO: begin
-                R[dst] <= operand + (lda76_has_src ? R[src] : 16'h0000);
+                rwb0_we=1'b1; rwb0_idx=dst; rwb0_val=operand + (lda76_has_src ? R[src] : 16'h0000);
                 retire<=1'b1; state<=S_FETCH0;
             end
 
@@ -2423,7 +2431,7 @@ module z8002
             // `ea`) sees `din`=mem[ea] one cycle later, same one-state-latency shape as
             // every other *_FETCH->*_RD pair in this file. ----
             S_LD71_FETCH: begin ea<=R[src]+R[din[11:8]]; pc<=pc+16'd2; state<=S_LD71_RD; end
-            S_LD71_RD: begin R[dst]<=din; retire<=1'b1; state<=S_FETCH0; end
+            S_LD71_RD: begin rwb0_we=1'b1; rwb0_idx=dst; rwb0_val=din; retire<=1'b1; state<=S_FETCH0; end
 
             // ---- JP cc,addr (src holds cc) ----
             S_JP: begin
@@ -2438,8 +2446,7 @@ module z8002
                 add8      = {1'b0,dbyte}+{1'b0,operand_b};
                 v = (operand_b[7]&dbyte[7]&~add8[7])|(~operand_b[7]&~dbyte[7]&add8[7]);
                 h = (add8[3:0] < dbyte[3:0]);
-                if (dst[3]) R[dst[2:0]][7:0] <=add8[7:0];
-                else        R[dst[2:0]][15:8]<=add8[7:0];
+                rwb0_we=1'b1; rwb0_idx={1'b0,dst[2:0]}; rwb0_val={2{add8[7:0]}}; rwb0_be=dst[3]?2'b01:2'b10;
                 fcw<=(fcw & ~(MC|MZ|MS|MV|MDA|MH))
                    | (add8[8]?MC:0)|((add8[7:0]==0)?MZ:0)|(add8[7]?MS:0)|(v?MV:0)|(h?MH:0);
                 retire<=1'b1; state<=S_FETCH0;
@@ -2447,37 +2454,37 @@ module z8002
 
             // ---- NVI accept sequence: push PC, push old FCW, push vec tag,
             //      then load new FCW/PC from the PSA NVI vector (PSAP+0x18/0x1A) ----
-            S_NVI_PC:  begin R[15]<=R[15]-16'd2; state<=S_NVI_FCW;   end  // addr/dout comb: SP-2 <= pc
-            S_NVI_FCW: begin R[15]<=R[15]-16'd2; state<=S_NVI_VEC;   end  // SP-4 <= old fcw
-            S_NVI_VEC: begin R[15]<=R[15]-16'd2; state<=S_NVI_RDFCW; end  // SP-6 <= 16'h00FF
+            S_NVI_PC:  begin rwb0_we=1'b1; rwb0_idx=4'd15; rwb0_val=R[15]-16'd2; state<=S_NVI_FCW;   end  // addr/dout comb: SP-2 <= pc
+            S_NVI_FCW: begin rwb0_we=1'b1; rwb0_idx=4'd15; rwb0_val=R[15]-16'd2; state<=S_NVI_VEC;   end  // SP-4 <= old fcw
+            S_NVI_VEC: begin rwb0_we=1'b1; rwb0_idx=4'd15; rwb0_val=R[15]-16'd2; state<=S_NVI_RDFCW; end  // SP-6 <= 16'h00FF
             S_NVI_RDFCW: begin fcw<=din; state<=S_NVI_RDPC; end          // fcw <= mem[psap+0x18]
             S_NVI_RDPC:  begin
                 pc<=din; nvi_pending<=1'b0; state<=S_FETCH0;             // pc <= mem[psap+0x1A]
             end
 
             // ---- IRET: pop vec(discard), pop FCW, pop PC ----
-            S_IRET_VEC: begin R[15]<=R[15]+16'd2; state<=S_IRET_FCW; end // discard din (tag)
-            S_IRET_FCW: begin fcw<=din; R[15]<=R[15]+16'd2; state<=S_IRET_PC; end
-            S_IRET_PC:  begin pc<=din; R[15]<=R[15]+16'd2; retire<=1'b1; state<=S_FETCH0; end
+            S_IRET_VEC: begin rwb0_we=1'b1; rwb0_idx=4'd15; rwb0_val=R[15]+16'd2; state<=S_IRET_FCW; end // discard din (tag)
+            S_IRET_FCW: begin fcw<=din; rwb0_we=1'b1; rwb0_idx=4'd15; rwb0_val=R[15]+16'd2; state<=S_IRET_PC; end
+            S_IRET_PC:  begin pc<=din; rwb0_we=1'b1; rwb0_idx=4'd15; rwb0_val=R[15]+16'd2; retire<=1'b1; state<=S_FETCH0; end
 
             // ==== BATCH 1: stack + control flow ========================================
             // ---- CALL: fetch target addr (direct form only), then push PC & jump ----
             S_CALL_FETCH: begin ea<=din; pc<=pc+16'd2; state<=S_CALL_PUSH; end // addr word via pc (default mux)
-            S_CALL_PUSH:  begin R[15]<=R[15]-16'd2; pc<=ea; retire<=1'b1; state<=S_FETCH0; end // addr=SP-2,dout=pc,we=1
+            S_CALL_PUSH:  begin rwb0_we=1'b1; rwb0_idx=4'd15; rwb0_val=R[15]-16'd2; pc<=ea; retire<=1'b1; state<=S_FETCH0; end // addr=SP-2,dout=pc,we=1
 
             // ---- RET cc (taken): pop PC, SP+=2 ----
-            S_RET_POP: begin pc<=din; R[15]<=R[15]+16'd2; retire<=1'b1; state<=S_FETCH0; end // addr=R[15]
+            S_RET_POP: begin pc<=din; rwb0_we=1'b1; rwb0_idx=4'd15; rwb0_val=R[15]+16'd2; retire<=1'b1; state<=S_FETCH0; end // addr=R[15]
 
             // ---- PUSH (word): value staged in `operand`, commit via generic push ----
             S_PUSHI_FETCH: begin operand<=din; pc<=pc+16'd2; state<=S_PUSH_W; end          // imm16 via pc
             S_PUSHA_FETCH: begin ea<=din; pc<=pc+16'd2; state<=S_PUSHA_RD; end             // addr word via pc
             S_PUSHA_RD:    begin operand<=din; state<=S_PUSH_W; end                        // addr=ea: read source value
-            S_PUSH_W:      begin R[dst]<=R[dst]-16'd2; retire<=1'b1; state<=S_FETCH0; end  // addr=R[dst]-2,dout=operand,we=1
+            S_PUSH_W:      begin rwb0_we=1'b1; rwb0_idx=dst; rwb0_val=R[dst]-16'd2; retire<=1'b1; state<=S_FETCH0; end  // addr=R[dst]-2,dout=operand,we=1
 
             // ---- POP (word): register-dest direct; addr-dest via fetch/pop/store chain ----
-            S_POP_R:      begin R[dst]<=din; R[src]<=R[src]+16'd2; retire<=1'b1; state<=S_FETCH0; end // addr=R[src]
+            S_POP_R:      begin rwb0_we=1'b1; rwb0_idx=dst; rwb0_val=din; rwb1_we=1'b1; rwb1_idx=src; rwb1_val=R[src]+16'd2; retire<=1'b1; state<=S_FETCH0; end // addr=R[src]
             S_POPA_FETCH: begin ea<=din; pc<=pc+16'd2; state<=S_POPA_POP; end                          // addr word via pc
-            S_POPA_POP:   begin operand<=din; R[src]<=R[src]+16'd2; state<=S_POPA_WR; end              // addr=R[src]
+            S_POPA_POP:   begin operand<=din; rwb0_we=1'b1; rwb0_idx=src; rwb0_val=R[src]+16'd2; state<=S_POPA_WR; end   // addr=R[src]
             S_POPA_WR:    begin retire<=1'b1; state<=S_FETCH0; end                                     // addr=ea,dout=operand,we=1
 
             // ---- shared 32-bit (long) pump: hi word @ea, lo word @ea+2. `dst`=dest
@@ -2486,22 +2493,22 @@ module z8002
             //      is written back (POPL: ea+4 ; PUSHL: ea, already = R[dst_orig]-4) ----
             S_L32_RD_HI: begin operand<=din; state<=S_L32_RD_LO; end // addr=ea: hi word
             S_L32_RD_LO: begin                                       // addr=ea+2: lo word
-                R[{dst[3:1],1'b0}]      <= operand;
-                R[{dst[3:1],1'b0}+4'd1] <= din;
-                if (l32wb) R[src] <= ea + 16'd4;
+                rwb0_we=1'b1; rwb0_idx={dst[3:1],1'b0};      rwb0_val=operand;
+                rwb1_we=1'b1; rwb1_idx={dst[3:1],1'b0}+4'd1; rwb1_val=din;
+                if (l32wb) begin rwb2_we=1'b1; rwb2_idx=src; rwb2_val=ea + 16'd4; end
                 retire<=1'b1; state<=S_FETCH0;
             end
             S_L32_WR_HI: begin state<=S_L32_WR_LO; end            // addr=ea,dout=R[{src pair}]: hi word
             S_L32_WR_LO: begin                                    // addr=ea+2,dout=R[{src pair}+1]: lo word
-                if (l32wb) R[dst] <= ea;
+                if (l32wb) begin rwb0_we=1'b1; rwb0_idx=dst; rwb0_val=ea; end
                 retire<=1'b1; state<=S_FETCH0;
             end
 
             // ---- LDL RRd,#imm32: hi word then lo word, both via pc (not ea) ----
             S_LDL_IMM_HI: begin operand<=din; pc<=pc+16'd2; state<=S_LDL_IMM_LO; end
             S_LDL_IMM_LO: begin
-                R[{dst[3:1],1'b0}]      <= operand;
-                R[{dst[3:1],1'b0}+4'd1] <= din;
+                rwb0_we=1'b1; rwb0_idx={dst[3:1],1'b0};      rwb0_val=operand;
+                rwb1_we=1'b1; rwb1_idx={dst[3:1],1'b0}+4'd1; rwb1_val=din;
                 pc<=pc+16'd2; retire<=1'b1; state<=S_FETCH0;
             end
 
@@ -2523,7 +2530,7 @@ module z8002
                 dst<=din[11:8]; mcnt<=din[3:0]; ea<=R[src]; pc<=pc+16'd2; state<=S_LDM_L_RD;
             end
             S_LDM_L_RD: begin // addr=ea
-                R[dst]<=din;
+                rwb0_we=1'b1; rwb0_idx=dst; rwb0_val=din;
                 if (mcnt==4'h0) begin retire<=1'b1; state<=S_FETCH0; end
                 else begin mcnt<=mcnt-4'd1; dst<=dst+4'd1; ea<=ea+16'd2; end
             end
@@ -2561,13 +2568,13 @@ module z8002
             S_PLII_RD_HI: begin operand<=din;  state<=S_PLII_WR_HI; end  // addr=R[src]: hi word
             S_PLII_WR_HI: begin                state<=S_PLII_RD_LO; end  // addr=ea,dout=operand,we=1
             S_PLII_RD_LO: begin operand2<=din; state<=S_PLII_WR_LO; end  // addr=R[src]+2: lo word
-            S_PLII_WR_LO: begin R[dst]<=ea; retire<=1'b1; state<=S_FETCH0; end // addr=ea+2,dout=operand2,we=1
+            S_PLII_WR_LO: begin rwb0_we=1'b1; rwb0_idx=dst; rwb0_val=ea; retire<=1'b1; state<=S_FETCH0; end // addr=ea+2,dout=operand2,we=1
 
             // ---- PUSH @Rd,@Rs (0x13): read word @R[src], hand off to existing S_PUSH_W ----
             S_PUSHII_RD: begin operand<=din; state<=S_PUSH_W; end        // addr=R[src]
 
             // ---- POP @Rd,@Rs (0x17): pop word @R[src] (+2), write LIVE @R[dst] ----
-            S_POPII_RD: begin R[src]<=R[src]+16'd2; operand<=din; state<=S_POPII_WR; end // addr=R[src]
+            S_POPII_RD: begin rwb0_we=1'b1; rwb0_idx=src; rwb0_val=R[src]+16'd2; operand<=din; state<=S_POPII_WR; end // addr=R[src]
             S_POPII_WR: begin retire<=1'b1; state<=S_FETCH0; end          // addr=R[dst] (live),dout=operand,we=1
 
             // ==== BATCH 2 PART B ========================================================
@@ -2602,7 +2609,7 @@ module z8002
                     default: begin res8=dbyte^operand[7:0]; z=(res8==0); s=res8[7]; p=(~^res8); // XOR
                          fmask=MZ|MS|MV; fval=(z?MZ:0)|(s?MS:0)|(p?MV:0); end
                 endcase
-                if (wb) begin if (dst[3]) R[dst[2:0]][7:0]<=res8; else R[dst[2:0]][15:8]<=res8; end
+                if (wb) begin rwb0_we=1'b1; rwb0_idx={1'b0,dst[2:0]}; rwb0_val={2{res8}}; rwb0_be=dst[3]?2'b01:2'b10; end
                 fcw<=(fcw & ~fmask) | fval;
                 retire<=1'b1; state<=S_FETCH0;
             end
@@ -2650,7 +2657,7 @@ module z8002
 
             // ---- EX rd,@rs (word exchange; flags ------, untouched) ----
             S_EX_RD: begin operand<=din; state<=S_EX_WR; end            // addr=R[src]: old mem value
-            S_EX_WR: begin R[dst]<=operand; retire<=1'b1; state<=S_FETCH0; end // addr=R[src],dout=R[dst](old),we=1
+            S_EX_WR: begin rwb0_we=1'b1; rwb0_idx=dst; rwb0_val=operand; retire<=1'b1; state<=S_FETCH0; end // addr=R[src],dout=R[dst](old),we=1
 
             // ==== BATCH 3 ================================================================
             // ---- INC/DEC addr,#n direct: fetch addr, RMW word (wordacc-safe by
@@ -2687,8 +2694,8 @@ module z8002
                 mul_p32 = $signed(R[{dst[3:1],1'b0}+4'd1]) * $signed(operand);
                 c = (mul_p32 < -32'sd32767) || (mul_p32 >= 32'sd32767);
                 z = (mul_p32 == 32'sd0); s = mul_p32[31];
-                R[{dst[3:1],1'b0}]      <= mul_p32[31:16];
-                R[{dst[3:1],1'b0}+4'd1] <= mul_p32[15:0];
+                rwb0_we=1'b1; rwb0_idx={dst[3:1],1'b0};      rwb0_val=mul_p32[31:16];
+                rwb1_we=1'b1; rwb1_idx={dst[3:1],1'b0}+4'd1; rwb1_val=mul_p32[15:0];
                 fcw<=(fcw & ~(MC|MZ|MS|MV)) | (c?MC:0)|(z?MZ:0)|(s?MS:0);
                 retire<=1'b1; state<=S_FETCH0;
             end
@@ -2764,8 +2771,8 @@ module z8002
                 end else begin
                     v = 1'b0; c = 1'b0; z=(div_q[15:0]==16'h0000); s=div_q[15];
                 end
-                R[{dst[3:1],1'b0}]      <= div_r[15:0];
-                R[{dst[3:1],1'b0}+4'd1] <= div_q[15:0];
+                rwb0_we=1'b1; rwb0_idx={dst[3:1],1'b0};      rwb0_val=div_r[15:0];
+                rwb1_we=1'b1; rwb1_idx={dst[3:1],1'b0}+4'd1; rwb1_val=div_q[15:0];
                 fcw<=(fcw & ~(MC|MZ|MS|MV)) | (c?MC:0)|(z?MZ:0)|(s?MS:0)|(v?MV:0);
                 retire<=1'b1; state<=S_FETCH0;
             end
@@ -2780,10 +2787,10 @@ module z8002
                 mul_p64 = $signed({R[qbase+4'd2],R[qbase+4'd3]}) * $signed({operand,operand2});
                 c = (mul_p64 < -64'sd2147483647) || (mul_p64 >= 64'sd2147483647);
                 z = (mul_p64 == 64'sd0); s = mul_p64[63];
-                R[qbase]      <= mul_p64[63:48];
-                R[qbase+4'd1] <= mul_p64[47:32];
-                R[qbase+4'd2] <= mul_p64[31:16];
-                R[qbase+4'd3] <= mul_p64[15:0];
+                rwb0_we=1'b1; rwb0_idx=qbase;      rwb0_val=mul_p64[63:48];
+                rwb1_we=1'b1; rwb1_idx=qbase+4'd1; rwb1_val=mul_p64[47:32];
+                rwb2_we=1'b1; rwb2_idx=qbase+4'd2; rwb2_val=mul_p64[31:16];
+                rwb3_we=1'b1; rwb3_idx=qbase+4'd3; rwb3_val=mul_p64[15:0];
                 fcw<=(fcw & ~(MC|MZ|MS|MV)) | (c?MC:0)|(z?MZ:0)|(s?MS:0);
                 retire<=1'b1; state<=S_FETCH0;
             end
@@ -2837,10 +2844,10 @@ module z8002
                 end else begin
                     v = 1'b0; c = 1'b0; z=(div_q64[31:0]==32'h00000000); s=div_q64[31];
                 end
-                R[qbase]      <= div_r32[31:16];
-                R[qbase+4'd1] <= div_r32[15:0];
-                R[qbase+4'd2] <= div_q64[31:16];
-                R[qbase+4'd3] <= div_q64[15:0];
+                rwb0_we=1'b1; rwb0_idx=qbase;      rwb0_val=div_r32[31:16];
+                rwb1_we=1'b1; rwb1_idx=qbase+4'd1; rwb1_val=div_r32[15:0];
+                rwb2_we=1'b1; rwb2_idx=qbase+4'd2; rwb2_val=div_q64[31:16];
+                rwb3_we=1'b1; rwb3_idx=qbase+4'd3; rwb3_val=div_q64[15:0];
                 fcw<=(fcw & ~(MC|MZ|MS|MV)) | (c?MC:0)|(z?MZ:0)|(s?MS:0)|(v?MV:0);
                 retire<=1'b1; state<=S_FETCH0;
             end
@@ -2865,8 +2872,8 @@ module z8002
                     res32=dif33[31:0]; c=dif33[32]; z=(res32==32'h00000000); s=res32[31];
                     v=(~val32[31]&a32[31]&~res32[31])|(val32[31]&~a32[31]&res32[31]);
                 end
-                R[{dst[3:1],1'b0}]      <= res32[31:16];
-                R[{dst[3:1],1'b0}+4'd1] <= res32[15:0];
+                rwb0_we=1'b1; rwb0_idx={dst[3:1],1'b0};      rwb0_val=res32[31:16];
+                rwb1_we=1'b1; rwb1_idx={dst[3:1],1'b0}+4'd1; rwb1_val=res32[15:0];
                 fcw<=(fcw & ~(MC|MZ|MS|MV)) | (c?MC:0)|(z?MZ:0)|(s?MS:0)|(v?MV:0);
                 retire<=1'b1; state<=S_FETCH0;
             end
@@ -2876,8 +2883,7 @@ module z8002
             //      unlike S_MEMRDB/S_ADDB_RD which read via a register-indirect pointer. ----
             S_LDBDA_FETCH: begin ea<=din; pc<=pc+16'd2; state<=S_LDBDA_RD; end // addr word via pc
             S_LDBDA_RD: begin // addr=ea&~1
-                if (dst[3]) R[dst[2:0]][7:0] <= ea[0] ? din[7:0] : din[15:8];
-                else        R[dst[2:0]][15:8]<= ea[0] ? din[7:0] : din[15:8];
+                rwb0_we=1'b1; rwb0_idx={1'b0,dst[2:0]}; rwb0_val={2{ea[0] ? din[7:0] : din[15:8]}}; rwb0_be=dst[3]?2'b01:2'b10;
                 retire<=1'b1; state<=S_FETCH0;
             end
 
@@ -2907,7 +2913,7 @@ module z8002
                     cbit = (cnt!=5'd0) ? (((dbyte << (cnt-5'd1)) & 8'h80)!=8'h00) : 1'b0;
                 end
                 z=(res8==8'h00); s=res8[7];
-                if (dst[3]) R[dst[2:0]][7:0]<=res8; else R[dst[2:0]][15:8]<=res8;
+                rwb0_we=1'b1; rwb0_idx={1'b0,dst[2:0]}; rwb0_val={2{res8}}; rwb0_be=dst[3]?2'b01:2'b10;
                 fcw<=(fcw & ~(MC|MZ|MS)) | (cbit?MC:0)|(z?MZ:0)|(s?MS:0);
                 pc<=pc+16'd2; retire<=1'b1; state<=S_FETCH0;
             end
@@ -2950,8 +2956,7 @@ module z8002
             S_EXB_RD: begin operand<=din; state<=S_EXB_WR; end        // addr=R[src]&~1
             S_EXB_WR: begin                                           // addr=R[src]&~1,dout=merged,we=1
                 // lane = R[src][0] (address LSB), NOT src[0] (the pointer register NUMBER)
-                if (dst[3]) R[dst[2:0]][7:0] <= R[src][0] ? operand[7:0] : operand[15:8];
-                else        R[dst[2:0]][15:8]<= R[src][0] ? operand[7:0] : operand[15:8];
+                rwb0_we=1'b1; rwb0_idx={1'b0,dst[2:0]}; rwb0_val={2{R[src][0] ? operand[7:0] : operand[15:8]}}; rwb0_be=dst[3]?2'b01:2'b10;
                 retire<=1'b1; state<=S_FETCH0;
             end
 
@@ -2996,8 +3001,7 @@ module z8002
             S_DAB_EXBX_FETCH: begin ea<=din+R[idxr]; pc<=pc+16'd2; state<=S_DAB_EXB_RD; end
             S_DAB_EXB_RD: begin operand<=din; state<=S_DAB_EXB_WR; end    // addr=ea&~1
             S_DAB_EXB_WR: begin                                           // addr=ea&~1,dout=merged,we=1
-                if (dst[3]) R[dst[2:0]][7:0] <= ea[0] ? operand[7:0] : operand[15:8];
-                else        R[dst[2:0]][15:8]<= ea[0] ? operand[7:0] : operand[15:8];
+                rwb0_we=1'b1; rwb0_idx={1'b0,dst[2:0]}; rwb0_val={2{ea[0] ? operand[7:0] : operand[15:8]}}; rwb0_be=dst[3]?2'b01:2'b10;
                 retire<=1'b1; state<=S_FETCH0;
             end
 
@@ -3005,7 +3009,7 @@ module z8002
             S_DAB_EXW_FETCH:  begin ea<=din;         pc<=pc+16'd2; state<=S_DAB_EXW_RD; end
             S_DAB_EXWX_FETCH: begin ea<=din+R[idxr]; pc<=pc+16'd2; state<=S_DAB_EXW_RD; end
             S_DAB_EXW_RD: begin operand<=din; state<=S_DAB_EXW_WR; end    // addr=ea
-            S_DAB_EXW_WR: begin R[dst]<=operand; retire<=1'b1; state<=S_FETCH0; end // addr=ea,dout=R[dst](old),we=1
+            S_DAB_EXW_WR: begin rwb0_we=1'b1; rwb0_idx=dst; rwb0_val=operand; retire<=1'b1; state<=S_FETCH0; end // addr=ea,dout=R[dst](old),we=1
 
             // ==== BATCH 5 PART 2: register-indirect @Rd simple family (0x0C/0x0D) =======
             // ---- TESTB @rd (read-only byte, flags -ZSP--; same formula as register-direct
@@ -3160,6 +3164,58 @@ module z8002
             S_ILLEGAL: ;
             default: state<=S_FETCH0;
             endcase
+
+            // ============ SHARED REGISTER-FILE WRITEBACK BUS ==========================
+            // AREA FIX 2026-07-28. Previously each of the ~111 R[] write sites scattered
+            // across the ~180-state case above assigned R[<index expr>] <= <value expr>
+            // directly. Synthesis has to build, for EVERY bit of EVERY one of the 16
+            // registers, a mux selecting among all ~111 possible next-values -- Quartus's
+            // own map.rpt fan-in table showed individual R[] bits needing 110..151-input
+            // muxes at ~146-200 LEs per bit, doubled because z8002 is instantiated twice
+            // (sub1+sub2). That is what made synthesis alone take ~15 minutes, and it got
+            // strictly worse with every state added.
+            //
+            // Now every write site instead drives one of four shared channels, and the
+            // register file is written from exactly one place: here. The wide value mux
+            // now exists ONCE per channel on a 16-bit bus instead of being replicated
+            // across all 16 registers, and each register bit sees only a 4-channel mux.
+            //
+            // Channel count = the maximum number of DISTINCT registers any single state
+            // writes: 4, set by the MULTL/DIVL quad-register (R[qbase..qbase+3]) writes.
+            // Two channels cover the 32-bit register-pair (RRd) and swap/pop forms; the
+            // third is used only by S_L32_RD_LO (pair + pointer writeback).
+            //
+            // Semantics deliberately preserved from the original code:
+            //  * Channels are applied in ascending order, so a later channel overrides an
+            //    earlier one on the same target -- matching "last non-blocking assignment
+            //    in the block wins", which is what the old aliasing cases (EX rd,rd and
+            //    POP rd,@rd) relied on.
+            //  * Priority is resolved PER BYTE LANE, not per register. EXB RHn,RLn writes
+            //    both halves of the SAME register from two channels in one cycle; a
+            //    per-register priority would incorrectly drop one of them.
+            //  * rwb*_be is {high-byte enable, low-byte enable}. Byte writes replicate the
+            //    byte into both halves of rwb*_val and let the mask pick the lane, so the
+            //    Z8000 RH/RL convention (register-field bit 3 set => RL => bits [7:0])
+            //    stays exactly where the original code had it.
+            //  * All reads of R[] elsewhere still see the OLD value: R[] is written only by
+            //    non-blocking assignments, and the channel signals are blocking temporaries
+            //    computed at the same point in the block the original write sat at.
+            if (rwb0_we) begin
+                if (rwb0_be[0]) R[rwb0_idx][7:0]  <= rwb0_val[7:0];
+                if (rwb0_be[1]) R[rwb0_idx][15:8] <= rwb0_val[15:8];
+            end
+            if (rwb1_we) begin
+                if (rwb1_be[0]) R[rwb1_idx][7:0]  <= rwb1_val[7:0];
+                if (rwb1_be[1]) R[rwb1_idx][15:8] <= rwb1_val[15:8];
+            end
+            if (rwb2_we) begin
+                if (rwb2_be[0]) R[rwb2_idx][7:0]  <= rwb2_val[7:0];
+                if (rwb2_be[1]) R[rwb2_idx][15:8] <= rwb2_val[15:8];
+            end
+            if (rwb3_we) begin
+                if (rwb3_be[0]) R[rwb3_idx][7:0]  <= rwb3_val[7:0];
+                if (rwb3_be[1]) R[rwb3_idx][15:8] <= rwb3_val[15:8];
+            end
         end
     end
 
