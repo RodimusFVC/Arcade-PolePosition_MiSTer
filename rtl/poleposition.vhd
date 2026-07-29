@@ -52,6 +52,13 @@ port(
  sprgfx_addr    : out std_logic_vector(16 downto 0);
  sprgfx_data    : in  std_logic_vector(7 downto 0);
 
+ -- namco_52xx sample ("voice") ROM (ioctl index 5, region-relative 0x4000-0xBFFF,
+ -- 0x8000 bytes -- the "engine" slice 0x0000-0x3FFF is a separate, still-unbuilt
+ -- device and not wired here). rtl/namco/namco_52xx.sv drives addr from its
+ -- internal O/R2/R3-port-built address register.
+ sample52_addr  : out std_logic_vector(14 downto 0);
+ sample52_data  : in  std_logic_vector(7 downto 0);
+
  -- palette PROM load (ioctl index 2, 0x000-0xFFF = R/G/B/alpha/view/vpos-mod/road/sprite)
  prom_wr        : in  std_logic;
  prom_addr      : in  std_logic_vector(11 downto 0);
@@ -289,6 +296,40 @@ architecture struct of poleposition is
    data_out     : out std_logic_vector(7 downto 0);
    dswa         : in  std_logic_vector(7 downto 0);
    steer_in     : in  std_logic_vector(7 downto 0);
+   rom_wr       : in  std_logic;
+   rom_addr_in  : in  std_logic_vector(11 downto 0);
+   rom_data_in  : in  std_logic_vector(7 downto 0)
+ );
+ end component;
+
+ component namco_54xx
+ port(
+   clk          : in  std_logic;
+   ena          : in  std_logic;
+   reset_n      : in  std_logic;
+   chip_sel     : in  std_logic;
+   wr_en        : in  std_logic;
+   wr_data      : in  std_logic_vector(7 downto 0);
+   discrete_o0  : out std_logic_vector(3 downto 0);
+   discrete_o1  : out std_logic_vector(3 downto 0);
+   discrete_r1  : out std_logic_vector(3 downto 0);
+   rom_wr       : in  std_logic;
+   rom_addr_in  : in  std_logic_vector(11 downto 0);
+   rom_data_in  : in  std_logic_vector(7 downto 0)
+ );
+ end component;
+
+ component namco_52xx
+ port(
+   clk          : in  std_logic;
+   ena          : in  std_logic;
+   reset_n      : in  std_logic;
+   chip_sel     : in  std_logic;
+   wr_en        : in  std_logic;
+   wr_data      : in  std_logic_vector(7 downto 0);
+   discrete_p   : out std_logic_vector(3 downto 0);
+   sample_addr  : out std_logic_vector(14 downto 0);
+   sample_data  : in  std_logic_vector(7 downto 0);
    rom_wr       : in  std_logic;
    rom_addr_in  : in  std_logic_vector(11 downto 0);
    rom_data_in  : in  std_logic_vector(7 downto 0)
@@ -671,8 +712,11 @@ mcu_reset_n <= (not reset) and namco_reset_w;
 in0_byte <= (not self_test) & (not service) & (not coin2) & (not coin1)
             & '1' & (not sb0_w) & (not fire1) & '1';
 
--- 52xx/54xx are not built this phase; their 06xx read lines return 0xFF,
--- matching MAME's devcb_read8 unbound-callback default.
+-- 52xx and 54xx (both built 2026-07-28) legitimately have NO read_callback<2>/<3>
+-- bound in polepos.cpp -- namco52.cpp/namco54.cpp have no read() method at all --
+-- so chip2_din/chip3_din staying tied to this 0xFF stub is CORRECT and permanent,
+-- not a placeholder: it matches MAME's devcb_read8 unbound-callback default
+-- exactly for both chips (verified by reading both device sources directly).
 chip23_din <= (others => '1');
 
 u_n06xx : namco_06xx
@@ -728,6 +772,45 @@ port map(
 	data_out    => chip1_din,
 	dswa        => dip_switch_a,
 	steer_in    => steer_in,
+	rom_wr      => mcu_rom_wr,
+	rom_addr_in => mcu_rom_addr,
+	rom_data_in => mcu_rom_data
+);
+
+-- 54xx: 06xx chip3 slot (write-only, no read_callback in MAME -- see chip23_din
+-- comment above). discrete_o0/o1/r1 feed MAME's analog "discrete" sound circuit,
+-- not modeled yet -- left open, same TODO status as u_pp_cpu's engine_* ports.
+u_n54xx : namco_54xx
+port map(
+	clk         => clock_18,
+	ena         => mcu_ena,
+	reset_n     => mcu_reset_n,
+	chip_sel    => n06_chipsel(3),
+	wr_en       => n06_chip_wr(3),
+	wr_data     => n06_chip_dout,
+	discrete_o0 => open,
+	discrete_o1 => open,
+	discrete_r1 => open,
+	rom_wr      => mcu_rom_wr,
+	rom_addr_in => mcu_rom_addr,
+	rom_data_in => mcu_rom_data
+);
+
+-- 52xx: 06xx chip2 slot (write-only, no read_callback in MAME -- see chip23_din
+-- comment above). discrete_p feeds MAME's analog "discrete" sound circuit, not
+-- modeled yet. sample_addr/sample_data are the external 0x8000 "voice" ROM
+-- (ioctl index 5, wired at the poleposition entity level via sample52_addr/data).
+u_n52xx : namco_52xx
+port map(
+	clk         => clock_18,
+	ena         => mcu_ena,
+	reset_n     => mcu_reset_n,
+	chip_sel    => n06_chipsel(2),
+	wr_en       => n06_chip_wr(2),
+	wr_data     => n06_chip_dout,
+	discrete_p  => open,
+	sample_addr => sample52_addr,
+	sample_data => sample52_data,
 	rom_wr      => mcu_rom_wr,
 	rom_addr_in => mcu_rom_addr,
 	rom_data_in => mcu_rom_data

@@ -49,6 +49,8 @@ set_global_assignment -name SYSTEMVERILOG_FILE rtl/PolePosition_CPU.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/namco/namco_06xx.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/namco/namco_51xx.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/namco/namco_53xx.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/namco/namco_54xx.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/namco/namco_52xx.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/namco/namco_wsg8.sv
 # ADC0804 (accelerator/brake pedal A/D converter, Z80 I/O port 0x00). Faithful
 # port of MAME's adc0804.cpp device model. Instantiated by poleposition.vhd via

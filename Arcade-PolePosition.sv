@@ -521,14 +521,27 @@ wire [7:0]  wsg_prom_addr = ioctl_addr[7:0] - 8'h40;
 wire [7:0]  wsg_prom_data = ioctl_dout;
 
 // STEP-3b-2: Namco 5xxx MCU internal ROMs — ioctl INDEX 6, region-relative
-// (resets to 0 at this index): 51xx.bin@0x000 53xx.bin@0x400 54xx.bin@0x800,
-// each 0x400. Mirrors the chars_rom/pp_prom load pattern above. poleposition.vhd
-// decodes addr[11:10] internally per-wrapper (namco_51xx.sv claims 00, namco_53xx.sv
-// claims 01); 54xx's slice (10) is loaded here for completeness but its MCU is
-// Phase-4/unbuilt (namco_06xx.sv ties chip3's read to 0xFF regardless).
-wire        mcu_rom_wr   = ioctl_wr & (ioctl_index == 8'd6) & (ioctl_addr < 25'hC00);
+// (resets to 0 at this index): 51xx.bin@0x000 53xx.bin@0x400 54xx.bin@0x800
+// 52xx.bin@0xC00, each 0x400 (2026-07-28: extended 0xC00-0xFFF to cover 52xx once
+// its firmware was sourced -- was previously excluded, gate stopped at 0xC00).
+// poleposition.vhd decodes addr[11:10] internally per-wrapper (namco_51xx.sv
+// claims 00, namco_53xx.sv claims 01, namco_54xx.sv claims 10, namco_52xx.sv
+// claims 11).
+wire        mcu_rom_wr   = ioctl_wr & (ioctl_index == 8'd6) & (ioctl_addr < 25'h1000);
 wire [11:0] mcu_rom_addr = ioctl_addr[11:0];
 wire [7:0]  mcu_rom_data = ioctl_dout;
+
+// namco_52xx sample ("voice") ROM — ioctl INDEX 5, region-relative 0x4000-0xBFFF
+// (0x8000 bytes; the "engine" slice 0x0000-0x3FFF is a separate unbuilt device,
+// not loaded here -- see PolePosition_CPU.sv's engine_* TODO). 2026-07-28.
+wire [14:0] sample52_addr;
+reg  [7:0]  sample52_data;
+reg  [7:0]  sample52_rom [0:32767]; // 0x8000
+wire        sample52_wr = ioctl_wr & (ioctl_index == 8'd5) & (ioctl_addr >= 25'h4000) & (ioctl_addr < 25'hC000);
+always @(posedge clk_sys) begin
+	if (sample52_wr) sample52_rom[ioctl_addr - 25'h4000] <= ioctl_dout;
+	sample52_data <= sample52_rom[sample52_addr];
+end
 
 // Steering (MAME "STEER" IPT_DIAL) — no real spinner/analog input is wired at
 // this top level yet (#unverified / KNOWN ITERATION POINT). Placeholder: a
@@ -579,6 +592,9 @@ poleposition poleposition
 	.scalelut_data(scalelut_data),
 	.sprgfx_addr(sprgfx_addr),
 	.sprgfx_data(sprgfx_data),
+
+	.sample52_addr(sample52_addr),
+	.sample52_data(sample52_data),
 
 	.prom_wr(pp_prom_wr),
 	.prom_addr(pp_prom_addr),

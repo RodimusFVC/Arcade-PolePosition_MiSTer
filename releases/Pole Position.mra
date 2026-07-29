@@ -52,8 +52,11 @@
              0x00000  51xx.bin  0x0400  (namco51.zip)  coin/credit I/O   [Z80 boot]
              0x00400  53xx.bin  0x0400  (namco53.zip)  steering/DSW I/O  [Z80 boot]
              0x00800  54xx.bin  0x0400  (namco54.zip)  engine noise      [sound]
-             (52xx voice has NO internal MCU ROM in this set — it plays the external
-              sample ROM in index 3; no namco52.zip exists.)
+             0x00C00  52xx.bin  0x0400  (namco52.zip)  sample player     [sound]
+             (2026-07-28: the "no namco52.zip exists" note here was wrong -- it's a
+              standard, commonly-dumped device ROM like 51/53/54xx, just not sourced
+              yet at the time. User has since supplied it, CRC verified 3257d11e vs
+              Useful Stuff/mame/namco52.cpp's ROM_START.)
          ================================================================== -->
 
     <!-- Index 0: CPU code — maincpu(Z80) + sub1/sub2(Z8002, big-endian 16-bit) -->
@@ -130,12 +133,15 @@
     </rom>
 
     <!-- Index 6: Namco 5xxx MCU internal mask ROMs (MB88 family). Separate device zips
-         (user-added): namco51/53/54.zip. Each holds one 0x400 file. 51xx+53xx are needed
-         for Z80 boot (coin/DSW/steering I/O); 54xx is engine-noise (sound). -->
-    <rom index="6" md5="none" zip="namco51.zip|namco53.zip|namco54.zip">
+         (user-added): namco51/52/53/54.zip. Each holds one 0x400 file. 51xx+53xx are
+         needed for Z80 boot (coin/DSW/steering I/O); 54xx is engine-noise (sound);
+         52xx is the sample-player MCU program (needs the "52xx voice" data ROM in
+         index 5 too -- that part was already present, only this firmware was missing). -->
+    <rom index="6" md5="none" zip="namco51.zip|namco52.zip|namco53.zip|namco54.zip">
         <part crc="c2f57ef8" name="51xx.bin"/>   <!-- coin/credit I/O -->
         <part crc="b326fecb" name="53xx.bin"/>   <!-- steering/DSW I/O -->
         <part crc="ee7357e0" name="54xx.bin"/>   <!-- engine noise -->
+        <part crc="3257d11e" name="52xx.bin"/>   <!-- sample player, lands @0xC00 -->
     </rom>
 
     <!-- TODO: populate <switches> from MAME poleposa INPUT_PORTS (DSWA/DSWB) and
