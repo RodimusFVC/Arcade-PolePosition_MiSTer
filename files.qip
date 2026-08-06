@@ -1,75 +1,39 @@
-set_global_assignment -name QIP_FILE rtl/cpu/T80/T80.qip
-set_global_assignment -name VHDL_FILE rtl/ram_rom/dpram.vhd
-set_global_assignment -name VHDL_FILE rtl/ram_rom/spram.vhd
-set_global_assignment -name VHDL_FILE rtl/ram_rom/dpram_dc.vhd
-# NVRAM power-on fill (MAME polepos.cpp:927 nvram_device::DEFAULT_ALL_1 = 0xFF),
-# consumed via dpram_dc's init_file generic in PolePosition_CPU.sv's nvram instance.
-set_global_assignment -name MIF_FILE rtl/ram_rom/pp_nvram_ff.mif
-set_global_assignment -name SYSTEMVERILOG_FILE rtl/sp_palette_msb.sv
-set_global_assignment -name SYSTEMVERILOG_FILE rtl/sp_palette_lsb.sv
-# XEVIOUS-STRIP-2026-08-06: sound_machine / sound_seq / sound_samples / sound_lpf
-# were compiled every build but instantiated NOWHERE (the only mention was a
-# comment in poleposition.vhd's header). Xevious scaffold leftovers — Pole
-# Position's audio is the Namco WSG plus pp_engine_snd. Files deleted; the .vhd
-# originals they were converted from remain in git history (commit 163721d).
-set_global_assignment -name SYSTEMVERILOG_FILE rtl/bg_palette_msb.sv
-set_global_assignment -name SYSTEMVERILOG_FILE rtl/bg_palette_lsb.sv
-# MB88xx MCU (Namco 5xxx) — OUR validated SystemVerilog core, NOT darfpga's mb88.vhd
-# (the VHDL one's BRAM read-after-write hazard was the Kangaroo hang; our combinational-RAM rewrite fixed it).
-# mb88.sv wrapper now matches Xevious's mb88 entity EXACTLY (ena_timer dropped; ÷32 timer tick made
-# internally from `ena`) so it binds to poleposition.vhd's `entity work.mb88` instances unchanged.
-# RESOLVED 2026-07-13: the `entity work.mb88` direct-entity bind FAILED (Error 10481). poleposition.vhd now uses a
-# VHDL `component mb88` declaration + component instantiation (the reliable Q17 VHDL-instantiates-SV path); SV core
-# is NOT renamed, so the mb88 verilator co-sim is unaffected.
+set_global_assignment -name VHDL_FILE          rtl/ram_rom/dpram.vhd
+set_global_assignment -name VHDL_FILE          rtl/ram_rom/dpram_dc.vhd
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/ram_rom/gen_ram.sv
+set_global_assignment -name MIF_FILE           rtl/ram_rom/pp_nvram_ff.mif
+set_global_assignment -name VHDL_FILE          rtl/ram_rom/spram.vhd
+set_global_assignment -name QIP_FILE           rtl/cpu/T80/T80.qip
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/cpu/mb88_sv/mb88_core.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/cpu/mb88_sv/mb88.sv
-# Part-2 alpha renderer (pp_tile_decode/pp_tile_layer are permanent; pp_alpha_bringup
-# is the DIAG-REVERT-2026-07-13 step-3a HW bring-up scaffold — remove after first-light test)
-set_global_assignment -name SYSTEMVERILOG_FILE rtl/pp_tile_decode.sv
-set_global_assignment -name SYSTEMVERILOG_FILE rtl/pp_tile_layer.sv
-set_global_assignment -name SYSTEMVERILOG_FILE rtl/pp_palette_alpha.sv
-set_global_assignment -name SYSTEMVERILOG_FILE rtl/pp_palette_view.sv
-set_global_assignment -name SYSTEMVERILOG_FILE rtl/pp_tile_composite.sv
-# Full video pipeline (road + sprites + 4-layer compositor). Generators co-sim-verified
-# vs MAME draw_road / zoom_sprite (verilator/road, verilator/sprite). pp_video_composite
-# supersedes pp_tile_composite (instantiated by poleposition.vhd).
-set_global_assignment -name SYSTEMVERILOG_FILE rtl/pp_palette_road.sv
-set_global_assignment -name SYSTEMVERILOG_FILE rtl/pp_palette_sprite.sv
-set_global_assignment -name SYSTEMVERILOG_FILE rtl/pp_road_gen.sv
-set_global_assignment -name SYSTEMVERILOG_FILE rtl/pp_sprite_gen.sv
-set_global_assignment -name SYSTEMVERILOG_FILE rtl/pp_video_composite.sv
-# STEP-3 CPU subsystem: Z80 maincpu + 2x Z8002 game CPUs + shared VRAM (replaces
-# the removed Xevious 3-Z80 muxed-bus section). Instantiated by poleposition.vhd.
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/cpu/z8002/z8002.sv
-set_global_assignment -name SYSTEMVERILOG_FILE rtl/PolePosition_subcpu.sv
-set_global_assignment -name SYSTEMVERILOG_FILE rtl/PolePosition_CPU.sv
-# STEP-3b-2: Namco 06xx bus arbiter + 51xx/53xx I/O MCU wrappers (mb88_core/mb88.sv
-# above, reused unmodified). Instantiated by poleposition.vhd via VHDL `component`
-# declarations (the direct `entity work.X` bind fails with Error 10481 per the
-# mb88 note above — component + instantiation is the proven Q17 VHDL<-SV path).
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/custom/adc0804.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/custom/pp_road_gen.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/custom/pp_sprite_gen.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/custom/pp_watchdog.sv
+set_global_assignment -name VERILOG_FILE       rtl/mister_custom/hiscore.v
+set_global_assignment -name VERILOG_FILE       rtl/mister_custom/pause.v
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/namco/namco_06xx.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/namco/namco_51xx.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/namco/namco_53xx.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/namco/namco_54xx.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/namco/namco_52xx.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/namco/namco_wsg8.sv
-# Engine ("car") sound — MAME polepos_a.cpp polepos_sound_device. Waveform ROM is
-# ioctl index 5 offset 0x0000-0x3FFF (the slice the MRA already downloaded but
-# nothing claimed until now). Instantiated by poleposition.vhd via a VHDL
-# component declaration, same proven Q17 VHDL<-SV path as the peripherals above.
-set_global_assignment -name SYSTEMVERILOG_FILE rtl/pp_engine_snd.sv
-# ADC0804 (accelerator/brake pedal A/D converter, Z80 I/O port 0x00). Faithful
-# port of MAME's adc0804.cpp device model. Instantiated by poleposition.vhd via
-# a VHDL `component` declaration (same proven Q17 VHDL<-SV path as the other
-# SystemVerilog peripherals above).
-set_global_assignment -name SYSTEMVERILOG_FILE rtl/adc0804.sv
-# Watchdog (Z80 $A100, MAME polepos.cpp:925 set_vblank_count(...,16)). Instantiated
-# by poleposition.vhd via a VHDL `component` declaration (same proven Q17
-# VHDL<-SV path as the other SystemVerilog peripherals above).
-set_global_assignment -name SYSTEMVERILOG_FILE rtl/pp_watchdog.sv
-set_global_assignment -name SYSTEMVERILOG_FILE rtl/gen_video.sv
-set_global_assignment -name SYSTEMVERILOG_FILE rtl/gen_ram.sv
-set_global_assignment -name VHDL_FILE rtl/poleposition.vhd
-set_global_assignment -name VERILOG_FILE rtl/hiscore.v
-set_global_assignment -name VERILOG_FILE rtl/pause.v
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/sound/pp_engine_snd.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/video/bg_palette_msb.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/video/bg_palette_lsb.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/video/gen_video.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/video/pp_palette_alpha.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/video/pp_palette_road.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/video/pp_palette_sprite.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/video/pp_palette_view.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/video/pp_tile_composite.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/video/pp_tile_decode.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/video/pp_tile_layer.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/video/pp_video_composite.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/video/sp_palette_msb.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/video/sp_palette_lsb.sv
+set_global_assignment -name VHDL_FILE          rtl/poleposition.vhd
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/PolePosition_CPU.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/PolePosition_subcpu.sv
 set_global_assignment -name SYSTEMVERILOG_FILE "Arcade-PolePosition.sv"
