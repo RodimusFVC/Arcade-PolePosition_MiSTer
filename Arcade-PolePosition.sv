@@ -231,8 +231,13 @@ localparam CONF_STR = {
 	"O2,Watchdog,On,Off;",
 	"O6,Service Mode,Off,On;",
 	"R0,Reset;",
-	"J1,Fire,Bomb,Start 1P,Start 2P,Coin,Pause;",
-	"jn,A,B,Start,Select,R,L;",
+	// 2026-08-05: 8-slot list, names + physical order copied from the MRA
+	// <buttons> element so core and MRA agree (they did not: CONF_STR had 6
+	// slots with Pause on joy[9], the MRA has 8 with Pause on joy[11]/L).
+	// Accelerate/Brake are ANALOG on the real cabinet -- digital placeholders
+	// for now (also on the D-pad); move to L2/R2 when analog input is wired.
+	"J1,Accelerate,Brake,Gear,Not Used,Coin,Start 1P,Start 2P,Pause;",
+	"jn,A,B,X,Y,Select,Start,R,L;",
 
 	"V,v",`BUILD_DATE
 };
@@ -352,25 +357,30 @@ always @(posedge clk_sys) begin
 end
 
 
-wire m_start1 = joystick_0[6] | joystick_1[7] | key_start1;
+wire m_start1 = joystick_0[9] | key_start1;                    // MRA slot 6 'Start 1P'
 wire m_coin1  = joystick_0[8] | key_coin1;
 wire m_up1    = joystick_0[3] | key_p1_up;
 wire m_down1  = joystick_0[2] | key_p1_down;
 wire m_left1  = joystick_0[1] | key_p1_left;
 wire m_right1 = joystick_0[0] | key_p1_right;
 wire m_fire1  = joystick_0[4] | key_p1_fire;
-wire m_bomb1  = joystick_0[5] | key_p1_bomb;
+wire m_bomb1  = joystick_0[6] | key_p1_bomb;                   // MRA slot 3 'Gear' (-> dip_switch_b bit0)
 
-wire m_start2 = joystick_1[6] | joystick_0[7] | key_start2;
+wire m_start2 = joystick_1[9] | joystick_0[10] | key_start2;   // MRA slot 7 'Start 2P'
 wire m_coin2  = joystick_1[8] | key_coin2;
 wire m_up2    = joystick_1[3] | key_p2_up;
 wire m_down2  = joystick_1[2] | key_p2_down;
 wire m_left2  = joystick_1[1] | key_p2_left;
 wire m_right2 = joystick_1[0] | key_p2_right;
 wire m_fire2  = joystick_1[4] | key_p2_fire;
-wire m_bomb2  = joystick_1[5] | key_p2_bomb;
+wire m_bomb2  = joystick_1[6] | key_p2_bomb;                   // MRA slot 3 'Gear' (-> dip_switch_b bit4)
 
-wire m_pause  = joy[9];
+// PAUSE-BIT-FIX-2026-08-05: was joy[9], which is the MRA's 6th button name
+// ("Start"), so START paused the game and the L shoulder did nothing.
+// MRA <buttons> names map to joy[4] upward in order, so with
+//   names="-,Gear,Start,Start 2,Coin,-,Pause"  ->  Pause is the 7th = joy[10],
+// which defaults to "L" (left shoulder) per the MRA's default= list.
+wire m_pause  = joy[11];                                       // MRA slot 8 'Pause' = L
 
 
 // PAUSE SYSTEM
@@ -567,8 +577,12 @@ end
 // the Gear Change input (IN0 bit1, see poleposition.vhd in0_byte), which is why
 // up/down were chosen here instead. Full scale is 0x90, NOT 0xFF, per MAME
 // PORT_MINMAX(0,0x90) on both ACCEL and BRAKE. Swap for real pedal mapping later.
-wire [7:0] pp_accel = m_up1   ? 8'h90 : 8'h00;
-wire [7:0] pp_brake = m_down1 ? 8'h90 : 8'h00;
+// Accept the MRA's Accelerate/Brake buttons (slots 1/2 = A/B) as well as the
+// existing D-pad placeholder. Both are digital until analog input is wired.
+wire m_accel1 = m_up1   | joystick_0[4];
+wire m_brake1 = m_down1 | joystick_0[5];
+wire [7:0] pp_accel = m_accel1 ? 8'h90 : 8'h00;
+wire [7:0] pp_brake = m_brake1 ? 8'h90 : 8'h00;
 
 poleposition poleposition
 (

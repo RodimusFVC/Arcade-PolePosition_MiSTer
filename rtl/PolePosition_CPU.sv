@@ -328,6 +328,7 @@ module PolePosition_CPU
     (
         .clk          (clk),
         .reset        (reset),
+        .pause        (pause),          // PAUSE-GATE-2026-08-05: freeze both Z8002s
 
         .sub1_reset_n (sub1_reset_n),
         .sub2_reset_n (sub2_reset_n),

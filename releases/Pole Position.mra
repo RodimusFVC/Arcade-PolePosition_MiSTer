@@ -14,7 +14,7 @@
     <setname>polepos</setname>
     <parent>polepos</parent>
     <mameversion>0270</mameversion>
-    <rbf>PolePosition</rbf>   <!-- TODO Phase-0: qpf/qsf/top rename Kangaroo->PolePosition must land so the build emits PolePosition.rbf -->
+    <rbf>PolePosition</rbf>
     <about></about>
 
     <resolution>15kHz</resolution>
@@ -53,7 +53,7 @@
              0x00400  53xx.bin  0x0400  (namco53.zip)  steering/DSW I/O  [Z80 boot]
              0x00800  54xx.bin  0x0400  (namco54.zip)  engine noise      [sound]
              0x00C00  52xx.bin  0x0400  (namco52.zip)  sample player     [sound]
-             (2026-07-28: the "no namco52.zip exists" note here was wrong -- it's a
+             (2026-07-28: the "no namco52.zip exists" note here was wrong - it's a
               standard, commonly-dumped device ROM like 51/53/54xx, just not sourced
               yet at the time. User has since supplied it, CRC verified 3257d11e vs
               Useful Stuff/mame/namco52.cpp's ROM_START.)
@@ -65,15 +65,29 @@
         <part crc="c0511173" name="pp3_9.6h"/>
         <part crc="7174bcb7" name="pp1_10b.5h"/>
         <!-- sub1 (Z8002 #1) 0x4000, ROM_LOAD16_BYTE: even=HIGH=.8l, odd=LOW=.8m (big-endian).
-             #unverified: interleave map direction — confirm vs the known-good pp_sub1.bin the Z8002 already boots on. -->
+             MAP DIRECTION FIXED + HW-CONFIRMED 2026-08-05. The previous values (.8l map="10",
+             .8m map="01") were INVERTED and corrupted BOTH sub ROMs. That is what caused the
+             long-standing hardware-only self-test failure reported as "RAM 73": a sub running
+             scrambled code writes garbage to the fault mailbox at Z8002 $8092. 73 is not even a
+             legitimate fault code - the ROM can only ever emit 0..51, which matches the operator
+             manual's own Table 2-4 maxima of 31 (sub1) and 51 (sub2).
+             CONVENTION (learned the hard way, no other <interleave map=> exists in this fleet):
+             map="01" places a part on the EVEN / first output byte; map="10" places it on the
+             ODD / second. Read the map digits RIGHT-to-LEFT - rightmost digit = output byte 0.
+             The intuitive left-to-right reading is WRONG and cost weeks here.
+             Cross-checks, all agreeing with the values below: MAME polepos.cpp ROM_START
+             (.8l @0x0000 even, .8m @0x0001 odd); rebuilding this interleave byte-for-byte
+             reproduces verilator/main/pp_sub1.bin and pp_sub2.bin exactly; RTL windows
+             SUB1_BASE=0x3000 / SUB2_BASE=0x7000, maincpu block exactly 0x3000 so sub1 lands on
+             its base unshifted; dn_wr is index-0 gated (ioctl_wr & rom_download). -->
         <interleave output="16">
-            <part crc="fafb9049" name="pp3_2.8l" map="10"/>
-            <part crc="65c1c2c2" name="pp3_1.8m" map="01"/>
+            <part crc="fafb9049" name="pp3_2.8l" map="01"/>
+            <part crc="65c1c2c2" name="pp3_1.8m" map="10"/>
         </interleave>
-        <!-- sub2 (Z8002 #2) 0x4000 -->
+        <!-- sub2 (Z8002 #2) 0x4000 - same inverted-map fix, same convention as sub1 above -->
         <interleave output="16">
-            <part crc="acc1ebc3" name="pp3_6.4l" map="10"/>
-            <part crc="46e5c99a" name="pp3_5.4m" map="01"/>
+            <part crc="acc1ebc3" name="pp3_6.4l" map="01"/>
+            <part crc="46e5c99a" name="pp3_5.4m" map="10"/>
         </interleave>
     </rom>
 
@@ -136,7 +150,7 @@
          (user-added): namco51/52/53/54.zip. Each holds one 0x400 file. 51xx+53xx are
          needed for Z80 boot (coin/DSW/steering I/O); 54xx is engine-noise (sound);
          52xx is the sample-player MCU program (needs the "52xx voice" data ROM in
-         index 5 too -- that part was already present, only this firmware was missing). -->
+         index 5 too - that part was already present, only this firmware was missing). -->
     <rom index="6" md5="none" zip="namco51.zip|namco52.zip|namco53.zip|namco54.zip">
         <part crc="c2f57ef8" name="51xx.bin"/>   <!-- coin/credit I/O -->
         <part crc="b326fecb" name="53xx.bin"/>   <!-- steering/DSW I/O -->
@@ -147,7 +161,8 @@
     <!-- TODO: populate <switches> from MAME poleposa INPUT_PORTS (DSWA/DSWB) and
          <buttons> for the Pole Position controls (accel, brake, gear-shift, steering).
          Left minimal so ROM loading / Z80 boot can be tested with defaults first. -->
-    <buttons names="Accelerate,Brake,Gear,-,Coin,Start,Pause" default="A,B,X,Y,Select,Start,L"/>
+
+    <buttons names="Accelerate,Brake,Gear,-,Coin,Start 1P,Start 2P,Pause" default="A,B,X,Y,Select,Start,R,L"/>
 
     <remark>Pole Position (Namco, World) — main set. Variants (polepos2, bootlegs) deferred.</remark>
     <mratimestamp>20260711000000</mratimestamp>

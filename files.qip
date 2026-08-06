@@ -5,14 +5,14 @@ set_global_assignment -name VHDL_FILE rtl/ram_rom/dpram_dc.vhd
 # NVRAM power-on fill (MAME polepos.cpp:927 nvram_device::DEFAULT_ALL_1 = 0xFF),
 # consumed via dpram_dc's init_file generic in PolePosition_CPU.sv's nvram instance.
 set_global_assignment -name MIF_FILE rtl/ram_rom/pp_nvram_ff.mif
-set_global_assignment -name VHDL_FILE rtl/sp_palette_msb.vhd
-set_global_assignment -name VHDL_FILE rtl/sp_palette_lsb.vhd
-set_global_assignment -name VHDL_FILE rtl/sound_seq.vhd
-set_global_assignment -name VHDL_FILE rtl/sound_samples.vhd
-set_global_assignment -name VHDL_FILE rtl/sound_lpf.vhd
-set_global_assignment -name VHDL_FILE rtl/bg_palette_msb.vhd
-set_global_assignment -name VHDL_FILE rtl/bg_palette_lsb.vhd
-set_global_assignment -name VHDL_FILE rtl/sound_machine.vhd
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/sp_palette_msb.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/sp_palette_lsb.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/sound_seq.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/sound_samples.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/sound_lpf.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/bg_palette_msb.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/bg_palette_lsb.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/sound_machine.sv
 # MB88xx MCU (Namco 5xxx) — OUR validated SystemVerilog core, NOT darfpga's mb88.vhd
 # (the VHDL one's BRAM read-after-write hazard was the Kangaroo hang; our combinational-RAM rewrite fixed it).
 # mb88.sv wrapper now matches Xevious's mb88 entity EXACTLY (ena_timer dropped; ÷32 timer tick made
@@ -61,8 +61,8 @@ set_global_assignment -name SYSTEMVERILOG_FILE rtl/adc0804.sv
 # by poleposition.vhd via a VHDL `component` declaration (same proven Q17
 # VHDL<-SV path as the other SystemVerilog peripherals above).
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/pp_watchdog.sv
-set_global_assignment -name VHDL_FILE rtl/gen_video.vhd
-set_global_assignment -name VHDL_FILE rtl/gen_ram.vhd
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/gen_video.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/gen_ram.sv
 set_global_assignment -name VHDL_FILE rtl/poleposition.vhd
 set_global_assignment -name VERILOG_FILE rtl/hiscore.v
 set_global_assignment -name VERILOG_FILE rtl/pause.v

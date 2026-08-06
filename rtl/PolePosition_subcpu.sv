@@ -29,7 +29,11 @@
 //  ports (Z80 byte / sub1 word / sub2 word), one per writer, each its own
 //  always block (see DIAG-REVERT-2026-07-12 below). Implemented behaviorally:
 //  each buffer is a hi/lo BYTE-array pair (avoids any array-element
-//  bit-select), with continuous combinational reads per consumer. An earlier
+//  bit-select), with a REGISTERED (synchronous, 1-clock) read per consumer --
+//  see the `*_qa`/`*_qb` NBA reads below. [Corrected 2026-08-05: this line
+//  previously said "continuous combinational reads", which the code has never
+//  done. Quartus infers these as altsyncram, matching the registered reads.]
+//  An earlier
 //  revision chained the three writers behind ONE priority-arbitrated
 //  (Z80 > sub1 > sub2) always block, which silently DROPPED a lower-priority
 //  writer's data whenever a higher-priority writer also wrote to that same
@@ -66,6 +70,14 @@
 module PolePosition_subcpu
 (
     input  wire        clk,
+    // PAUSE-GATE-2026-08-05: freezes BOTH Z8002 sub-CPUs. Previously unpaused --
+    // pausing only the main Z80 left the two subs running, so the game did not
+    // actually stop. Gates cen_sub1/cen_sub2 ONLY, deliberately NOT `div`
+    // itself: div also drives the shared-VRAM port-A ownership rotation and the
+    // scanout read ports, so freezing it would freeze the display. The video
+    // counters must keep running while paused (see the vault note's table --
+    // video counters are the one block you leave alone).
+    input  wire        pause,
     input  wire        reset,          // active-high subsystem reset
 
     // ---- per-CPU reset (LS259 latch, PolePosition_CPU) + vblank NVI pulse ----
@@ -124,8 +136,8 @@ module PolePosition_subcpu
         if (reset) div <= 4'd0;
         else       div <= div + 4'd1;
     end
-    wire cen_sub1 = (div == 4'd5);
-    wire cen_sub2 = (div == 4'd10);
+    wire cen_sub1 = (div == 4'd5)  & ~pause;   // PAUSE-GATE-2026-08-05
+    wire cen_sub2 = (div == 4'd10) & ~pause;   // PAUSE-GATE-2026-08-05
 
     //------------------------------------------------------------------------
     //  Z8002 instances

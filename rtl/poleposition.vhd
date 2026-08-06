@@ -341,6 +341,7 @@ architecture struct of poleposition is
    clk       : in  std_logic;
    reset     : in  std_logic;
    sound_en  : in  std_logic;
+   pause     : in  std_logic;   -- PAUSE-GATE-2026-08-05
    reg_addr  : in  std_logic_vector(5 downto 0);
    reg_din   : in  std_logic_vector(7 downto 0);
    reg_wr    : in  std_logic;
@@ -464,7 +465,32 @@ architecture struct of poleposition is
    wdog_en    : in  std_logic;
    vpos       : in  std_logic_vector(8 downto 0);
    kick       : in  std_logic;
+   pause      : in  std_logic;   -- PAUSE-GATE-2026-08-05
    wdog_reset : out std_logic
+ );
+ end component;
+
+ -- 2026-08-05: gen_video is now SystemVerilog (rtl/gen_video.sv). A SV module is
+ -- NOT a VHDL primary unit in library `work`, so the previous direct-entity bind
+ -- (`entity work.gen_video`) fails with Error 10481. Declared as a plain VHDL
+ -- `component` instead -- the same proven Q17 pattern already used above for
+ -- namco_06xx/51xx/52xx/53xx/54xx, namco_wsg8, adc0804, pp_video_composite,
+ -- PolePosition_CPU and pp_watchdog, all of which are SystemVerilog modules.
+ -- Port names/types/order copied verbatim from gen_video.vhd's entity.
+ component gen_video
+ port(
+   clk      : in  std_logic;
+   enable   : in  std_logic;
+   hcnt     : out std_logic_vector(8 downto 0);
+   vcnt     : out std_logic_vector(8 downto 0);
+   hsync    : out std_logic;
+   vsync    : out std_logic;
+   csync    : out std_logic;
+   blank_h  : out std_logic;
+   blank_v  : out std_logic;
+   blankn   : out std_logic;
+   h_offset : in  signed(3 downto 0);
+   v_offset : in  signed(3 downto 0)
  );
  end component;
 
@@ -491,10 +517,37 @@ cpu_ioctl_addr <= "00000000" & dn_addr;
 cpu_rom_wr     <= dn_wr when dn_addr(16 downto 12) < "00011" else '0';  -- maincpu region < 0x3000
 
 -- Z80 / Z8002 clock enable = clock_18 /16
+--
+-- CEN-PHASE-FIX-2026-08-05: cen_cnt is now RESET-SYNCHRONISED. It previously had
+-- no reset and free-ran from FPGA configuration, while PolePosition_subcpu.sv's
+-- `div` counter (which owns the shared-VRAM port-A time-division mux) DOES reset:
+--     always @(posedge clk) if (reset) div <= 4'd0; else div <= div + 4'd1;
+-- Both are 4-bit and tick every clock, so the PHASE between this `cen` pulse and
+-- the Z80's port-A ownership window (own_z80 = div <= 4, i.e. 5 slots of 16) was
+-- arbitrary -- determined by whenever reset happened to be released, and shifted
+-- by every subsequent reset.
+--
+-- Consequence when the phase lands wrong: `cen` fires outside div 0..4, so
+-- own_z80 is low for the entire Z80 access and EVERY Z80 read/write to shared
+-- VRAM is silently dropped -- no stall, no retry, no error. Reads additionally
+-- capture whichever address another master had on the shared port.
+--
+-- This is a prime suspect for the HW-only self-test "RAM 73" failure (a Z8002
+-- sub's RAM pattern test over shared VRAM) that Verilator never reproduces: the
+-- sim releases reset at a fixed cycle after ROM load and so always lands on the
+-- same -- evidently good -- phase, while real HW's reset release is gated by the
+-- reset chain / ioctl_download and lands elsewhere.
+--
+-- Resetting cen_cnt to 0 alongside div makes `cen` fire at div=0, inside the
+-- Z80's ownership window, deterministically and identically on every reset.
 process (clock_18)
 begin
 	if rising_edge(clock_18) then
-		cen_cnt <= cen_cnt + "0001";
+		if reset = '1' then
+			cen_cnt <= (others => '0');
+		else
+			cen_cnt <= cen_cnt + "0001";
+		end if;
 	end if;
 end process;
 cen <= '1' when cen_cnt = "0000" else '0';
@@ -522,7 +575,7 @@ begin
 end process;
 
 -- H/V sync + counters (reused as-is; 384x264 Namco-family timing)
-gen_video : entity work.gen_video
+u_gen_video : gen_video
 port map(
 	clk      => clock_18,
 	enable   => ena_vidgen,
@@ -647,6 +700,7 @@ port map(
 	wdog_en    => wdog_en,
 	vpos       => vcnt,
 	kick       => watchdog_wr_w,
+	pause      => pause,
 	wdog_reset => wdog_reset_w
 );
 
@@ -680,6 +734,7 @@ port map(
 	clk       => clock_18,
 	reset     => reset,
 	sound_en  => sound_en_w,
+	pause     => pause,
 	reg_addr  => wsg_addr_w,
 	reg_din   => wsg_dout_w,
 	reg_wr    => wsg_wr_w,
@@ -691,10 +746,17 @@ port map(
 );
 
 -- ---- Namco 5xxx MCU clock enable (see signal declaration comment) ----------
+-- MCU-PHASE-FIX-2026-08-05: same defect class as CEN-PHASE-FIX above. mcu_div is
+-- a toggle with no reset, so its polarity after any reset was arbitrary (whatever
+-- it happened to hold), making mcu_ena land on either the even or the odd `cen`
+-- -- non-deterministic across resets. The 51xx/53xx sit on the 06xx handshake in
+-- the boot path, so give them a deterministic enable phase too.
 process (clock_18)
 begin
 	if rising_edge(clock_18) then
-		if cen = '1' then
+		if reset = '1' then
+			mcu_div <= '0';
+		elsif cen = '1' then
 			mcu_div <= not mcu_div;
 		end if;
 	end if;
@@ -763,6 +825,10 @@ port map(
 	vblank      => vblank
 );
 
+-- 2026-08-05: the 53xx was temporarily removed here to test whether it explained the
+-- HW-only "RAM 73" self-test failure (the Verilator rig omits namco_53xx and ties
+-- chip1_din to 0xFF, making it the only 06xx-bus delta between the two environments).
+-- RESULT: HW-tested, ZERO difference — same RAM 73. The 53xx is NOT the cause. Restored.
 u_n53xx : namco_53xx
 port map(
 	clk         => clock_18,
