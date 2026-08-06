@@ -33,7 +33,8 @@ module pp_sprite_gen
     input  wire [8:0]  hpos,
     input  wire [8:0]  vpos,
 
-    output wire [10:0] scan_sprite_addr,   // sprite16_memory, COMBINATIONAL read
+    output wire [10:0] scan_sprite_addr,   // sprite16_memory, REGISTERED read (1 clk)
+                                           // -- see SCAN-LATENCY-FIX-2026-08-06 below
     input  wire [15:0] scan_sprite_dout,
 
     output reg  [11:0] scalelut_addr,      // scalelut ROM (0x1000), 1-clk sync
@@ -63,7 +64,10 @@ module pp_sprite_gen
     // ---- generation FSM ----------------------------------------------------
     localparam [3:0] S_IDLE=0, S_CLR=1, S_A0=2, S_A1=3, S_A2=4, S_A3=5,
                      S_CALC=6, S_CALC2=13, S_SCALE=7, S_DSET=8, S_FLO=9,
-                     S_FHI=10, S_PIX=11, S_DONE=12;
+                     S_FHI=10, S_PIX=11, S_DONE=12,
+    // SCAN-LATENCY-FIX-2026-08-06: S_A4 absorbs the 1-clock scan_sprite read latency
+    // (the attribute captures below each shifted one state later).
+                     S_A4=14;
     reg [3:0]  st;
     reg [8:0]  ygen, ygen_prev;
     reg        gbank;
@@ -124,10 +128,21 @@ module pp_sprite_gen
             clr_i <= clr_i + 9'd1;
             if (clr_i[7:0] == 8'hff) begin spr <= 6'd0; attr_sel <= 2'd0; st <= S_A0; end
         end
-        S_A0: begin p0w <= scan_sprite_dout; attr_sel <= 2'd1; st <= S_A1; end
-        S_A1: begin p1w <= scan_sprite_dout; attr_sel <= 2'd2; st <= S_A2; end
-        S_A2: begin s0w <= scan_sprite_dout; attr_sel <= 2'd3; st <= S_A3; end
-        S_A3: begin s1w <= scan_sprite_dout; st <= S_CALC; end
+        // SCAN-LATENCY-FIX-2026-08-06: scan_sprite is a REGISTERED read in
+        // PolePosition_subcpu.sv:411-414 (`sprite_lo_qb <= sprite_lo[scan_sprite_addr]`,
+        // done to infer BRAM), NOT the combinational read this port's declaration still
+        // advertised. Each capture below used to sit in the same state that first drove
+        // its address, so every attribute word landed one state early: p0w took stale
+        // data left over from S_CLR, p1w took p0's word, s0w took p1's, s1w took s0's.
+        // S_CALC derives sx from p1w and the scale from s0w/s1w, so the sprite came out
+        // at the wrong X and the wrong size -- the squashed sprite at the left edge.
+        // Address now goes out one state ahead of its capture; attr_sel stays at 3
+        // through S_A4 so addr3 is still presented when s1w samples it.
+        S_A0: begin                          attr_sel <= 2'd1; st <= S_A1; end  // addr0 out
+        S_A1: begin p0w <= scan_sprite_dout; attr_sel <= 2'd2; st <= S_A2; end  // = mem[addr0]
+        S_A2: begin p1w <= scan_sprite_dout; attr_sel <= 2'd3; st <= S_A3; end  // = mem[addr1]
+        S_A3: begin s0w <= scan_sprite_dout;                   st <= S_A4; end  // = mem[addr2]
+        S_A4: begin s1w <= scan_sprite_dout;                   st <= S_CALC; end// = mem[addr3]
         S_CALC: begin
             sx    <= p1w[9:0] - 10'h40 + 10'd4;
             sy    <= 10'd513 - {1'b0, p0w[8:0]};      // 512 - (pos&0x1ff) + 1

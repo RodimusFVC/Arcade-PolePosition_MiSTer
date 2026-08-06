@@ -242,10 +242,31 @@ localparam CONF_STR = {
 	"V,v",`BUILD_DATE
 };
 
+// DIP switches, ioctl index 254 (MRA <switches>). Byte 0 = DSWA, byte 1 = DSWB.
+//
+// DSW-DIRECT-2026-08-06: the `~` inversion that used to be on ioctl_dout is GONE.
+// MAME reads both ports with NO inversion -- polepos.cpp:905-906 (53xx input<2>/<3>
+// = DSWA nibbles) and :888-889 (51xx input<0>/<1> = DSWB nibbles) -- so an MRA byte
+// now equals the MAME DSW byte exactly, and every <dip> ids list in the MRA can be
+// transcribed straight from the poleposa INPUT_PORTS table. With the inversion in
+// place each ids list had to be written back-to-front: the same "which way round"
+// trap that cost weeks on the ROM interleave map.
+//
+// NOTE the set mapping: MAME's WORLD set uses the *poleposa* port table --
+// GAME(1982, polepos, 0, polepos, poleposa, ...) at polepos.cpp:2556. Do not read
+// the `polepos` INPUT_PORTS block; its DIP bits are in the opposite order.
+//
+// Power-on values are the MAME defaults (DSWA 0xFF, DSWB 0x74) so a stale MRA with
+// no <switches> still gives 1C/1C, 90 secs, 3 laps rather than the all-zero
+// Free Play / 120 secs / 4 laps / Rank G+H that the missing block used to produce.
 reg [7:0] dsw[2];
+initial begin
+	dsw[0] = 8'hFF;
+	dsw[1] = 8'h74;
+end
 always @(posedge clk_sys)
 	if (ioctl_wr && (ioctl_index==254) && !ioctl_addr[24:1])
-		dsw[ioctl_addr[0]] <= ~ioctl_dout;
+		dsw[ioctl_addr[0]] <= ioctl_dout;
 
 ////////////////////   CLOCKS   ///////////////////
 
@@ -356,32 +377,30 @@ always @(posedge clk_sys) begin
 	end
 end
 
+wire m_right1 = joystick_0[0]  | key_p1_right;
+wire m_left1  = joystick_0[1]  | key_p1_left;
+wire m_down1  = joystick_0[2]  | key_p1_down;
+wire m_up1    = joystick_0[3]  | key_p1_up;
+// wire m_accelerate1 = joystick_0[4];
+// wire m_break1 = joystick_0[5];
+wire m_gear1  = joystick_0[6]  | key_p1_fire | key_p1_bomb;
+// joystick_0[7]; NOT USED
+wire m_coin1  = joystick_0[8]  | key_coin1;
+wire m_start1 = joystick_0[9]  | key_start1;
+// joystick_1[9] is P2's own Start button (MRA slot 6 on the second pad); it means
+// the same thing as P1 pressing slot 7 'Start 2P', so both feed m_start2.
+wire m_start2 = joystick_0[10] | joystick_1[9] | key_start2;
+wire m_pause  = joystick_0[11];
 
-wire m_start1 = joystick_0[9] | key_start1;                    // MRA slot 6 'Start 1P'
-wire m_coin1  = joystick_0[8] | key_coin1;
-wire m_up1    = joystick_0[3] | key_p1_up;
-wire m_down1  = joystick_0[2] | key_p1_down;
-wire m_left1  = joystick_0[1] | key_p1_left;
-wire m_right1 = joystick_0[0] | key_p1_right;
-wire m_fire1  = joystick_0[4] | key_p1_fire;
-wire m_bomb1  = joystick_0[6] | key_p1_bomb;                   // MRA slot 3 'Gear' (-> dip_switch_b bit0)
-
-wire m_start2 = joystick_1[9] | joystick_0[10] | key_start2;   // MRA slot 7 'Start 2P'
-wire m_coin2  = joystick_1[8] | key_coin2;
-wire m_up2    = joystick_1[3] | key_p2_up;
-wire m_down2  = joystick_1[2] | key_p2_down;
-wire m_left2  = joystick_1[1] | key_p2_left;
-wire m_right2 = joystick_1[0] | key_p2_right;
-wire m_fire2  = joystick_1[4] | key_p2_fire;
-wire m_bomb2  = joystick_1[6] | key_p2_bomb;                   // MRA slot 3 'Gear' (-> dip_switch_b bit4)
-
-// PAUSE-BIT-FIX-2026-08-05: was joy[9], which is the MRA's 6th button name
-// ("Start"), so START paused the game and the L shoulder did nothing.
-// MRA <buttons> names map to joy[4] upward in order, so with
-//   names="-,Gear,Start,Start 2,Coin,-,Pause"  ->  Pause is the 7th = joy[10],
-// which defaults to "L" (left shoulder) per the MRA's default= list.
-wire m_pause  = joy[11];                                       // MRA slot 8 'Pause' = L
-
+// XEVIOUS-STRIP-2026-08-06: m_right2/m_left2/m_down2/m_up2/m_gear2 removed.
+// Their only consumer was the poleposition.vhd port list, and those ports were
+// themselves dead (declared, never referenced in the architecture). Pole Position
+// is a single-seat cabinet: one steering wheel, one pedal pair, one gear shifter.
+// Coin 2 and Start 2 are real and stay.
+wire m_coin2  = joystick_1[8]  | key_coin2;
+// The joystick_1 copies of m_start1/m_start2/m_pause that used to sit here were
+// duplicate declarations of the joystick_0 ones above (Quartus error 10149).
+// P2's Start is folded into m_start2 above; Pause is a single global control.
 
 // PAUSE SYSTEM
 wire				pause_cpu;
@@ -416,7 +435,12 @@ wire flip = 0;
 
 screen_rotate screen_rotate (.*);
 
-arcade_video #(288,12) arcade_video
+// XEVIOUS-STRIP-2026-08-06: width parameter 288 -> 256. 288 was Xevious's active
+// width; Pole Position's is 256 (the 2026-07-28 WIDTH trim in gen_video.sv). This
+// parameter only sizes the scandoubler's line buffer, so the oversized value was
+// harmless — it just reserved a line buffer a tile-column wider than any line the
+// core can produce.
+arcade_video #(256,12) arcade_video
 (
 	.*,
 
@@ -553,6 +577,20 @@ always @(posedge clk_sys) begin
 	sample52_data <= sample52_rom[sample52_addr];
 end
 
+// Engine sound waveform ROM — ioctl index 5, region-relative 0x0000-0x3FFF
+// (pp1_15.6a + pp1_16.5a, MAME's "engine" region). ENGINE-SOUND-2026-08-06:
+// the MRA has always downloaded this slice; before now nothing claimed it and
+// it was dropped on the floor. 8 slots x 0x800 bytes, addressed by
+// pp_engine_snd as {slot, index}.
+wire [13:0] engine_addr;
+reg  [7:0]  engine_data;
+reg  [7:0]  engine_rom [0:16383]; // 0x4000
+wire        engine_wr = ioctl_wr & (ioctl_index == 8'd5) & (ioctl_addr < 25'h4000);
+always @(posedge clk_sys) begin
+	if (engine_wr) engine_rom[ioctl_addr[13:0]] <= ioctl_dout;
+	engine_data <= engine_rom[engine_addr];
+end
+
 // Steering (MAME "STEER" IPT_DIAL) — no real spinner/analog input is wired at
 // this top level yet (#unverified / KNOWN ITERATION POINT). Placeholder: a
 // digital up/down counter driven by m_left1/m_right1 (both otherwise DEAD in
@@ -573,9 +611,9 @@ end
 // accel_in/brake_in ports) — DIGITAL PLACEHOLDER, no real analog/pedal input is
 // wired at this top level yet (#unverified / KNOWN ITERATION POINT, same status
 // as steer_pos above). up1/down1 double as full-on/off accel/brake so the ADC
-// path has SOMETHING to convert for first HW bring-up; m_fire1 is reserved for
-// the Gear Change input (IN0 bit1, see poleposition.vhd in0_byte), which is why
-// up/down were chosen here instead. Full scale is 0x90, NOT 0xFF, per MAME
+// path has SOMETHING to convert for first HW bring-up; m_gear1 carries the Gear
+// Change input (IN0 bit1, see poleposition.vhd in0_byte), which is why up/down
+// were chosen here instead. Full scale is 0x90, NOT 0xFF, per MAME
 // PORT_MINMAX(0,0x90) on both ACCEL and BRAKE. Swap for real pedal mapping later.
 // Accept the MRA's Accelerate/Brake buttons (slots 1/2 = A/B) as well as the
 // existing D-pad placeholder. Both are digital until analog input is wired.
@@ -610,6 +648,10 @@ poleposition poleposition
 	.sample52_addr(sample52_addr),
 	.sample52_data(sample52_data),
 
+	// ENGINE-SOUND-2026-08-06
+	.engine_addr(engine_addr),
+	.engine_data(engine_data),
+
 	.prom_wr(pp_prom_wr),
 	.prom_addr(pp_prom_addr),
 	.prom_data(pp_prom_data),
@@ -640,19 +682,20 @@ poleposition poleposition
 	.coin2(m_coin2),
 	.start1(m_start1),
 	.start2(m_start2),
-	.up1(m_up1),
-	.down1(m_down1),
-	.left1(m_left1),
-	.right1(m_right1),
-	.fire1(m_fire1),
-	.up2(m_up2),
-	.down2(m_down2),
-	.left2(m_left2),
-	.right2(m_right2),
-	.fire2(m_fire2),
+	// XEVIOUS-STRIP-2026-08-06: the up1/down1/left1/right1 and up2/down2/left2/
+	// right2/fire2 connections are gone -- those entity ports were Xevious
+	// two-player scaffold and were referenced nowhere inside poleposition.vhd.
+	// fire1 stays because it is the real Gear Change input (IN0 bit 0x02); Pole
+	// Position has only one gear, so there is no P2 counterpart to keep.
+	.fire1(m_gear1),      // scaffold port name; carries Gear Change -> in0_byte bit1
 
+	// GEAR-FIX-2026-08-06: dip_switch_b is now the plain DSWB byte. It used to be
+	// {dsw[1][7:5], ~m_bomb2, dsw[1][3:1], ~m_bomb1} -- Xevious-scaffold leftovers
+	// that overwrote bit4 (part of poleposa "Extended Rank", mask 0x1c) and bit0
+	// ("Demo Sounds") with the P2/P1 gear buttons, so neither setting could ever be
+	// set from the MRA and pressing Gear changed a DIP at runtime.
 	.dip_switch_a(dsw[0]),
-	.dip_switch_b({dsw[1][7:5], ~m_bomb2, dsw[1][3:1], ~m_bomb1}),
+	.dip_switch_b(dsw[1]),
 
 	.pause(pause_cpu),
 

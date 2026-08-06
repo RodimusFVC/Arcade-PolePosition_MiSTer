@@ -158,10 +158,44 @@
         <part crc="3257d11e" name="52xx.bin"/>   <!-- sample player, lands @0xC00 -->
     </rom>
 
-    <!-- TODO: populate <switches> from MAME poleposa INPUT_PORTS (DSWA/DSWB) and
-         <buttons> for the Pole Position controls (accel, brake, gear-shift, steering).
-         Left minimal so ROM loading / Z80 boot can be tested with defaults first. -->
+    <!-- DIP switches. Byte 0 = DSWA, byte 1 = DSWB (Arcade-PolePosition.sv routes
+         ioctl index 254 addr0 -> dip_switch_a, addr1 -> dip_switch_b).
 
+         ** SOURCE: MAME's *poleposa* INPUT_PORTS, NOT the `polepos` one. **
+         The World set uses the Atari port table; polepos.cpp:2556 reads
+         GAME( 1982, polepos, 0, polepos, poleposa, ... ). The two tables carry the
+         same settings at opposite ends of the byte (Coin A is 0x07 in `polepos`
+         but 0xe0 in `poleposa`), so reading the wrong block puts every field in
+         the wrong place. Values below transcribed from polepos.cpp:575-623.
+
+         The core applies NO inversion to these bytes as of DSW-DIRECT-2026-08-06,
+         so each byte here IS the value MAME's CPU reads, and each ids list is in
+         raw field order (index 0 = field value 0).
+
+         Defaults FF,74 are MAME's own: 1C/1C, 1C/1C, 90 secs, 3 laps / Practice
+         Rank B, Extended Rank C, mph, Demo Sounds On.
+
+         ** bits="lo,hi" is an INCLUSIVE RANGE, not a list. ** A three-bit field is
+         bits="5,7"; writing bits="5,6,7" silently truncates. Bit numbering runs
+         across the whole word: DSWA = bits 0-7, DSWB = bits 8-15. -->
+    <switches default="FF,74">
+        <!-- DSWA (byte 0) -->
+        <dip name="Coin A"        bits="5,7"   ids="Free Play,2C/1C,3C/2C,1C/2C,4C/3C,1C/3C,3C/1C,1C/1C"/>
+        <dip name="Coin B"        bits="3,4"   ids="4C/3C,2C/1C,3C/2C,1C/1C"/>
+        <dip name="Game Time"     bits="1,2"   ids="120 secs,100 secs,110 secs,90 secs"/>
+        <dip name="Racing Laps"   bits="0,0"   ids="4,3"/>
+        <!-- DSWB (byte 1) -->
+        <dip name="Practice Rank" bits="13,15" ids="H,D,F,B,G,C,E,A"/>
+        <dip name="Extended Rank" bits="10,12" ids="H,D,F,B,G,C,E,A"/>
+        <dip name="Speed Unit"    bits="9,9"   ids="mph,km/h"/>
+        <dip name="Demo Sounds"   bits="8,8"   ids="On,Off"/>
+    </switches>
+
+    <!-- Steering, accelerator and brake are ANALOG on the real cabinet (MAME
+         IPT_DIAL / IPT_PEDAL / IPT_PEDAL2) and are still digital placeholders in
+         the core, so not represented here. Gear is a real digital button and as of
+         GEAR-FIX-2026-08-06 slot 3 finally reaches IN0 bit1 (it used to land on a
+         DIP bit while Accelerate drove the gear). -->
     <buttons names="Accelerate,Brake,Gear,-,Coin,Start 1P,Start 2P,Pause" default="A,B,X,Y,Select,Start,R,L"/>
 
     <remark>Pole Position (Namco, World) — main set. Variants (polepos2, bootlegs) deferred.</remark>

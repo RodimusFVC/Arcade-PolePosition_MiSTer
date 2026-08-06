@@ -5,10 +5,15 @@
 -- 2026-07-13 STEP-3 GUT: the Xevious 3-Z80 muxed-bus CPU section + the entire
 -- Xevious video pipeline (fg/bg/sprite fetch, palettes, terrain, sound_machine,
 -- mb88 5xxx) were REMOVED and replaced by PolePosition_CPU (Z80 + 2x Z8002 +
--- shared VRAM) driving the pp_alpha_bringup renderer. Only gen_video (H/V timing)
--- + the free-running pixel-slot machine (ena_vidgen) survive from the original.
--- Old code is recoverable from git. Sound / view / sprites / road / palette / the
--- Namco 5xxx I/O bus are NOT wired yet (this increment = real alpha content only).
+-- shared VRAM). Only gen_video (H/V timing) + the free-running pixel-slot machine
+-- (ena_vidgen) survive from the original. Old code is recoverable from git.
+--
+-- STATUS 2026-08-06 (the 07-13 note above said sound/view/sprites/road/palette/
+-- the Namco 5xxx bus were "NOT wired yet" and the renderer was pp_alpha_bringup;
+-- all of that is long obsolete, so it is corrected here rather than left to
+-- mislead): the renderer is pp_video_composite (alpha + view + road + sprites),
+-- the 06xx bus with 51xx/52xx/53xx/54xx is live, and audio is namco_wsg8 mixed
+-- with pp_engine_snd. Still absent: the 52xx/54xx analog "discrete" outputs.
 ---------------------------------------------------------------------------------
 -- Educational use only. Do not redistribute synthetized file with roms.
 ---------------------------------------------------------------------------------
@@ -59,6 +64,11 @@ port(
  sample52_addr  : out std_logic_vector(14 downto 0);
  sample52_data  : in  std_logic_vector(7 downto 0);
 
+ -- ENGINE-SOUND-2026-08-06: engine ("car") sound waveform ROM, ioctl index 5
+ -- region-relative 0x0000-0x3FFF (MAME "engine" region, 8 slots x 0x800).
+ engine_addr    : out std_logic_vector(13 downto 0);
+ engine_data    : in  std_logic_vector(7 downto 0);
+
  -- palette PROM load (ioctl index 2, 0x000-0xFFF = R/G/B/alpha/view/vpos-mod/road/sprite)
  prom_wr        : in  std_logic;
  prom_addr      : in  std_logic_vector(11 downto 0);
@@ -88,7 +98,9 @@ port(
  flip           : in std_logic;
  h_offset	: in signed(3 downto 0);
  v_offset	: in signed(3 downto 0);
- test_v         : in std_logic_vector (3 downto 0);
+ -- XEVIOUS-STRIP-2026-08-06: `test_v : in std_logic_vector(3 downto 0)` removed.
+ -- It was declared here, referenced nowhere in the architecture, and left
+ -- unconnected at the instantiation -- an undriven input on every build.
 
  audio          : out std_logic_vector(15 downto 0);
 
@@ -97,19 +109,19 @@ port(
  coin1          : in std_logic;
 
  start1         : in std_logic;
+ -- fire1 is the real Gear Change input (MAME IN0 bit 0x02) -- see in0_byte below.
  fire1          : in std_logic;
- up1            : in std_logic;
- down1          : in std_logic;
- left1          : in std_logic;
- right1         : in std_logic;
 
  coin2          : in std_logic;
  start2         : in std_logic;
- up2            : in std_logic;
- down2          : in std_logic;
- left2          : in std_logic;
- right2         : in std_logic;
- fire2          : in std_logic;
+
+ -- XEVIOUS-STRIP-2026-08-06: up1/down1/left1/right1 and up2/down2/left2/right2/
+ -- fire2 were removed from this entity. They were Xevious two-player scaffold
+ -- ports: declared here and referenced NOWHERE in the architecture below. Pole
+ -- Position's directional controls are ANALOG (steering via the 53xx, pedals via
+ -- the ADC0804), and it has exactly ONE gear input, so there is no P2 equivalent.
+ -- The P1 direction signals still exist in Arcade-PolePosition.sv, where they
+ -- drive the digital steering/pedal placeholders.
 
  pause          : in std_logic;
 
@@ -229,6 +241,15 @@ architecture struct of poleposition is
  -- Namco WSG (8-voice, rtl/namco_wsg8.sv). u_pp_cpu's sound_en/wsg_* ports
  -- were open/zero8 tie-offs; now real (see u_wsg instance + wiring below).
  signal sound_en_w  : std_logic;
+
+ -- ENGINE-SOUND-2026-08-06: engine ("car") sound, rtl/pp_engine_snd.sv.
+ -- wsg_audio_w/engine_audio_w are the two voices; `audio` is their mix (below).
+ signal engine_dout_w   : std_logic_vector(7 downto 0);
+ signal engine_lsb_wr_w : std_logic;
+ signal engine_msb_wr_w : std_logic;
+ signal wsg_audio_w     : std_logic_vector(15 downto 0);
+ signal engine_audio_w  : std_logic_vector(15 downto 0);
+ signal audio_mix_s     : signed(16 downto 0);
  signal wsg_addr_w  : std_logic_vector(5 downto 0);
  signal wsg_dout_w  : std_logic_vector(7 downto 0);
  signal wsg_wr_w    : std_logic;
@@ -333,6 +354,24 @@ architecture struct of poleposition is
    rom_wr       : in  std_logic;
    rom_addr_in  : in  std_logic_vector(11 downto 0);
    rom_data_in  : in  std_logic_vector(7 downto 0)
+ );
+ end component;
+
+ -- ENGINE-SOUND-2026-08-06: rtl/pp_engine_snd.sv (MAME polepos_a.cpp
+ -- polepos_sound_device). Instantiated via a VHDL component declaration, the
+ -- proven Q17 VHDL<-SystemVerilog path used by every other SV peripheral here.
+ component pp_engine_snd
+ port(
+   clk       : in  std_logic;
+   reset     : in  std_logic;
+   pause     : in  std_logic;
+   clson     : in  std_logic;
+   lsb_wr    : in  std_logic;
+   msb_wr    : in  std_logic;
+   din       : in  std_logic_vector(7 downto 0);
+   rom_addr  : out std_logic_vector(13 downto 0);
+   rom_data  : in  std_logic_vector(7 downto 0);
+   audio     : out std_logic_vector(15 downto 0)
  );
  end component;
 
@@ -666,9 +705,9 @@ port map(
 	wsg_rd           => open,        -- unused: reg_dout is a live combinational readback,
 	                                  -- no read-strobe needed (see namco_wsg8.sv)
 	wsg_din          => wsg_din_w,
-	engine_dout      => open,        -- TODO engine sound (polepos_a.cpp) -- separate follow-up
-	engine_lsb_wr    => open,        -- TODO engine sound (polepos_a.cpp) -- separate follow-up
-	engine_msb_wr    => open,        -- TODO engine sound (polepos_a.cpp) -- separate follow-up
+	engine_dout      => engine_dout_w,   -- ENGINE-SOUND-2026-08-06: now real (u_engine below)
+	engine_lsb_wr    => engine_lsb_wr_w,
+	engine_msb_wr    => engine_msb_wr_w,
 	adc_wr           => adc_wr_w,
 	adc_rd           => adc_rd_w,
 	adc_din          => adc_din_w,
@@ -742,8 +781,36 @@ port map(
 	wave_wr   => wsg_prom_wr,
 	wave_addr => wsg_prom_addr,
 	wave_data => wsg_prom_data,
-	audio     => audio
+	audio     => wsg_audio_w        -- ENGINE-SOUND-2026-08-06: was `audio` directly;
+);                                  -- now one of two voices into the mix below.
+
+-- ---- engine ("car") sound -------------------------------------------------
+-- MAME polepos_a.cpp polepos_sound_device: an 8-slot x 0x800 waveform ROM read
+-- by a phase accumulator whose rate comes from the 0xA200/0xA300 register pair,
+-- with a per-slot volume. clson is LS259 q2 = the same sound_en that gates the
+-- WSG (polepos.cpp:938). See pp_engine_snd.sv's header for the rate derivation
+-- and for what is deliberately NOT modelled (the 3-pole analog filter chain).
+u_engine : pp_engine_snd
+port map(
+	clk      => clock_18,
+	reset    => reset,
+	pause    => pause,
+	clson    => sound_en_w,
+	lsb_wr   => engine_lsb_wr_w,
+	msb_wr   => engine_msb_wr_w,
+	din      => engine_dout_w,
+	rom_addr => engine_addr,
+	rom_data => engine_data,
+	audio    => engine_audio_w
 );
+
+-- ---- audio mix ------------------------------------------------------------
+-- Sum in 17 bits then saturate, so the WSG keeps its previous level (a plain
+-- >>1 mix would have quietly halved it) and only genuine peaks clip.
+audio_mix_s <= resize(signed(wsg_audio_w), 17) + resize(signed(engine_audio_w), 17);
+audio <= x"7FFF" when audio_mix_s >  to_signed(32767, 17) else
+         x"8000" when audio_mix_s < to_signed(-32768, 17) else
+         std_logic_vector(audio_mix_s(15 downto 0));
 
 -- ---- Namco 5xxx MCU clock enable (see signal declaration comment) ----------
 -- MCU-PHASE-FIX-2026-08-05: same defect class as CEN-PHASE-FIX above. mcu_div is

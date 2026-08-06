@@ -7,12 +7,13 @@ set_global_assignment -name VHDL_FILE rtl/ram_rom/dpram_dc.vhd
 set_global_assignment -name MIF_FILE rtl/ram_rom/pp_nvram_ff.mif
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/sp_palette_msb.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/sp_palette_lsb.sv
-set_global_assignment -name SYSTEMVERILOG_FILE rtl/sound_seq.sv
-set_global_assignment -name SYSTEMVERILOG_FILE rtl/sound_samples.sv
-set_global_assignment -name SYSTEMVERILOG_FILE rtl/sound_lpf.sv
+# XEVIOUS-STRIP-2026-08-06: sound_machine / sound_seq / sound_samples / sound_lpf
+# were compiled every build but instantiated NOWHERE (the only mention was a
+# comment in poleposition.vhd's header). Xevious scaffold leftovers — Pole
+# Position's audio is the Namco WSG plus pp_engine_snd. Files deleted; the .vhd
+# originals they were converted from remain in git history (commit 163721d).
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/bg_palette_msb.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/bg_palette_lsb.sv
-set_global_assignment -name SYSTEMVERILOG_FILE rtl/sound_machine.sv
 # MB88xx MCU (Namco 5xxx) — OUR validated SystemVerilog core, NOT darfpga's mb88.vhd
 # (the VHDL one's BRAM read-after-write hazard was the Kangaroo hang; our combinational-RAM rewrite fixed it).
 # mb88.sv wrapper now matches Xevious's mb88 entity EXACTLY (ena_timer dropped; ÷32 timer tick made
@@ -52,6 +53,11 @@ set_global_assignment -name SYSTEMVERILOG_FILE rtl/namco/namco_53xx.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/namco/namco_54xx.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/namco/namco_52xx.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/namco/namco_wsg8.sv
+# Engine ("car") sound — MAME polepos_a.cpp polepos_sound_device. Waveform ROM is
+# ioctl index 5 offset 0x0000-0x3FFF (the slice the MRA already downloaded but
+# nothing claimed until now). Instantiated by poleposition.vhd via a VHDL
+# component declaration, same proven Q17 VHDL<-SV path as the peripherals above.
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/pp_engine_snd.sv
 # ADC0804 (accelerator/brake pedal A/D converter, Z80 I/O port 0x00). Faithful
 # port of MAME's adc0804.cpp device model. Instantiated by poleposition.vhd via
 # a VHDL `component` declaration (same proven Q17 VHDL<-SV path as the other
