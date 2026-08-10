@@ -51,6 +51,13 @@ module mb88_core
     output reg  [15:0] r_out,          // R0..R3 output latch
     output reg  [3:0]  p_out,          // P output latch
     output reg  [7:0]  o_out,          // O output latch (via PLA - stubbed identity)
+    // O-PORT-STROBE-2026-08-09: pulses for one ce cycle on EVERY outO instruction,
+    // whether or not o_out's value changed. MAME's write_pla() ends with an
+    // unconditional `m_write_o(0, m_o_output, mask)` (mb88xx.cpp:373), so consumers
+    // that latch the O port (e.g. namco_51xx's shared mailbox = MAME m_portO) must
+    // re-latch on every write, not on a value change. Purely additive: existing
+    // instantiations that leave it unconnected are unaffected.
+    output reg         o_wr,
     input  wire        si_in,
     output reg         so_out,
     input  wire        irq_n, tc_in,   // real IRQ pins (TODO: internal trigger path)
@@ -143,7 +150,7 @@ module mb88_core
             SI<=0; TH<=0; TL<=0; SB<=0; pio<=0;
             // R0 resets HIGH (MB8841.pdf: output ports high during reset); R1-R3 low
             // (R3.3 high => spurious NMI). Z80 reads R0.bit1 at boot to arm E039 — must be 1.
-            r_out<=16'h000F; p_out<=0; o_out<=0; so_out<=0;
+            r_out<=16'h000F; p_out<=0; o_out<=0; so_out<=0; o_wr<=1'b0;
             retire<=0; illegal<=0; state<=S_FETCH; op1<=0;
             in_irq<=0; int_ack<=0; fetch_pc<=0; pending_irq<=0; TP<=0; tc_in_d<=1'b1;
             SBcount<=11'd0; serial_ps<=3'd0; serial_disabled<=1'b0;
@@ -189,6 +196,7 @@ module mb88_core
           end
           if (ce) begin
             retire <= 1'b0; int_ack <= 1'b0;
+            o_wr <= 1'b0;                       // O-PORT-STROBE-2026-08-09
             wr_en = 1'b0; wr_val = 4'h0; wr_addr = 7'h0;
             case (state)
             // ==================================================================
@@ -206,7 +214,9 @@ module mb88_core
                 retire<=1'b1;
                 case (op)
                 8'h00: st<=1;                                   // nop
-                8'h01: begin if (cf) o_out[7:4]<=A; else o_out[3:0]<=A; st<=1; end // outO: cf=1->oh, cf=0->ol (MAME write_pla 8-bit / VHDL)
+                // outO: cf=1->oh, cf=0->ol (MAME write_pla 8-bit / VHDL). o_wr pulses
+                // unconditionally here — see the O-PORT-STROBE note on the port decl.
+                8'h01: begin if (cf) o_out[7:4]<=A; else o_out[3:0]<=A; o_wr<=1'b1; st<=1; end
                 8'h02: begin p_out<=A; st<=1; end               // outP
                 8'h03: begin r_out[Y[1:0]*4 +: 4]<=A; st<=1; end// outR
                 8'h04: begin Y<=A; st<=1; end                   // tay

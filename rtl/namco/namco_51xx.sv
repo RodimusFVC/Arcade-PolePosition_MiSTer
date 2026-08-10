@@ -66,19 +66,26 @@ module namco_51xx
 );
 
     // ---- shared mailbox (see header) ---------------------------------------
+    // O-PORT-STROBE-FIX-2026-08-09 -------------------------------------------
+    // Was: `o_out_changed = (o_out_w != o_out_prev)` -- the mailbox only re-latched
+    // when the MCU's O value CHANGED. MAME re-latches on every outO regardless:
+    // mb88xx.cpp write_pla() ends in an unconditional `m_write_o(0, m_o_output, mask)`
+    // -> namco51.cpp O_w() -> `m_portO = data`. So a repeat outO of the same value
+    // still clobbers whatever the Z80 wrote. With change-detection the Z80's command
+    // byte survived instead, leaving a STALE reply in the mailbox -- which corrupts
+    // both data_out (the byte the Z80 reads back at $810C) and K_r, since K2:0 feeds
+    // the mailbox low bits back into the MCU's own firmware.
+    // Now driven by mb88's real o_wr strobe, matching MAME exactly.
     wire [7:0] o_out_w;
-    reg  [7:0] o_out_prev;
+    wire       o_wr_w;
     reg  [7:0] mailbox;
-    wire       o_out_changed = (o_out_w != o_out_prev);
 
     always @(posedge clk) begin
         if (!reset_n) begin
-            mailbox     <= 8'h00;
-            o_out_prev  <= 8'h00;
+            mailbox <= 8'h00;
         end else begin
-            o_out_prev <= o_out_w;
-            if (wr_en)             mailbox <= wr_data;      // Z80 write wins (matches MAME order)
-            else if (o_out_changed) mailbox <= o_out_w;      // MCU's own outO write
+            if (wr_en)        mailbox <= wr_data;   // Z80 write wins (matches MAME order)
+            else if (o_wr_w)  mailbox <= o_out_w;   // MCU's own outO -- EVERY write
         end
     end
 
@@ -110,6 +117,7 @@ module namco_51xx
         .r0_port_out(r0_out), .r1_port_out(r1_out), .r2_port_out(r2_out), .r3_port_out(r3_out),
         .k_port_in  (k_in),
         .ol_port_out(ol_w), .oh_port_out(oh_w),
+        .o_wr       (o_wr_w),                       // O-PORT-STROBE-FIX-2026-08-09
         .p_port_out (p_port_out),
 
         .stby_n     (1'b1),

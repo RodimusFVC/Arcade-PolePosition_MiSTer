@@ -24,6 +24,7 @@ module mb88
     output wire [3:0]  r0_port_out, r1_port_out, r2_port_out, r3_port_out,
     input  wire [3:0]  k_port_in,
     output wire [3:0]  ol_port_out, oh_port_out,
+    output wire        o_wr,        // O-PORT-STROBE-2026-08-09: pulses on every outO
     output wire [3:0]  p_port_out,
 
     input  wire        stby_n,
@@ -87,6 +88,7 @@ module mb88
         .r_out     (r_out),
         .p_out     (p_port_out),
         .o_out     (o_out),
+        .o_wr      (o_wr),
         .si_in     (si_n),
         .so_out    (),
         .irq_n     (irq_n),

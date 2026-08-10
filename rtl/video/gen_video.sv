@@ -172,6 +172,15 @@ module gen_video (
             // This also supersedes the untested "N=0" phase drop noted above, which
             // had shifted the picture RIGHT 3 px and was never HW-verified.
             // VERTICAL DELIBERATELY UNTOUCHED: user confirms top/bottom already align.
+            // PIXCLK-PHASE-2026-08-09: REVERTED (HW-tested, user: "you broke the video
+            // output with that realignment by one pixel column"). After
+            // PIXCLK-FIX-2026-08-09 the picture sits 1 px too far LEFT, but moving the
+            // phase term 40 -> 39 on both hblank compares did NOT fix it -- it broke
+            // output entirely. Restored to 40. The 1 px offset is a KNOWN-OPEN cosmetic
+            // issue; do not retry the naive both-terms-by-one shift, it has been tested
+            // and failed. Likely needs the ena_vidgen/hcnt phase addressed instead,
+            // since the corrected 1-in-8 enable is free-running where the old Xevious
+            // slot machine self-synced to hcnt(0).
             if (hcntReg == (448+16+8+40-384)) begin        // = 128
                 hblank <= 1'b1;
             end else if (hcntReg == (192-16+8+32+40)) begin // = 256

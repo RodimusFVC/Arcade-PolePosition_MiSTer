@@ -33,6 +33,12 @@ port(
  -- Driven from Arcade-PolePosition.sv's OSD "Watchdog" toggle, default ON.
  wdog_en        : in std_logic;
 
+ -- ILLEGAL-SCREAM-2026-08-09: sticky 'a Z8002 sub hit an unimplemented opcode'
+ -- flag. z8002.sv's S_ILLEGAL is a TERMINAL state -- the sub stops dead, silently,
+ -- and the only symptom is frozen road/sprite/view buffers (reads as a video bug).
+ -- Routed to LED_USER in Arcade-PolePosition.sv.
+ sub_illegal    : out std_logic;
+
  dn_addr        : in  std_logic_vector(16 downto 0);
  dn_data        : in  std_logic_vector(7 downto 0);
  dn_wr          : in  std_logic;
@@ -480,6 +486,7 @@ architecture struct of poleposition is
    adc_din          : in  std_logic_vector(7 downto 0);
    adc_intr_n       : in  std_logic;
    watchdog_wr      : out std_logic;
+   sub_illegal      : out std_logic;   -- ILLEGAL-SCREAM-2026-08-09
    ioctl_addr       : in  std_logic_vector(24 downto 0);
    ioctl_data       : in  std_logic_vector(7 downto 0);
    rom_wr           : in  std_logic;
@@ -591,25 +598,58 @@ begin
 end process;
 cen <= '1' when cen_cnt = "0000" else '0';
 
--- free-running pixel-slot machine (unchanged from Xevious): generates ena_vidgen
--- that gen_video + the renderer step on. slot self-syncs to hcnt.
-process (clock_18, hcnt)
-begin
-	if rising_edge(clock_18) then
-		slot24  <= slot24 + "00001";
-		slot    <= slot + "001";
-		if slot = "101" then
-			if (hcnt(2 downto 0) = "111") then slot24 <= (others=>'0'); end if;
-			if (hcnt(0) = '1') then slot <= "000"; else slot <= "011"; end if;
-		end if;
-	end if;
-end process;
-
+-- PIXCLK-FIX-2026-08-09 -----------------------------------------------------
+-- ena_vidgen is the pixel clock enable: it steps gen_video's H/V counters, the
+-- renderer (pp_video_composite.ce) AND the core's output CE_PIXEL
+-- (Arcade-PolePosition.sv:426 `wire ce_pix = ce_vid;`).
+--
+-- Pole Position needs a 6.144 MHz pixel clock (MAME polepos.cpp:950
+-- set_raw(MASTER_CLOCK/4, 384, 0, 256, 264, ...) with MASTER_CLOCK=24.576 MHz),
+-- i.e. 384*264 @ 60.606 Hz. clock_18 is now 49.152 MHz (the PLL is single-output;
+-- the signal name is a fossil of the old 18.432 MHz domain), so the enable must
+-- be exactly 1-in-8: 49.152/8 = 6.144 MHz.
+--
+-- The original below was inherited unchanged from Xevious, whose 18.432 MHz
+-- domain needs 1-in-3 (18.432/3 = 6.144 MHz). Run at 49.152 MHz it measures
+-- ~1-in-6 => 8.192 MHz pixel clock => 384*264 @ 80.8 Hz, i.e. video ~33% fast.
+-- The CPU divider WAS re-derived for the new clock (cen = clk/16 = 3.072 MHz,
+-- matching MAME's Z80 MASTER_CLOCK/8), which is why boot speed matches MAME
+-- while everything downstream of the first EI breaks.
+--
+-- Measured in verilator/pp_maincpu before this change: 609,888 clk/frame
+-- (6.016 clk per pixel step). Correct is 384*8*264 = 811,008 clk/frame.
+--
+-- To revert: delete the process below, uncomment the original.
+--   process (clock_18, hcnt)
+--   begin
+--   	if rising_edge(clock_18) then
+--   		slot24  <= slot24 + "00001";
+--   		slot    <= slot + "001";
+--   		if slot = "101" then
+--   			if (hcnt(2 downto 0) = "111") then slot24 <= (others=>'0'); end if;
+--   			if (hcnt(0) = '1') then slot <= "000"; else slot <= "011"; end if;
+--   		end if;
+--   	end if;
+--   end process;
+--
+--   process (clock_18)
+--   begin
+--   	if rising_edge(clock_18) then
+--   		ena_vidgen <= '0';
+--   		if slot = "100" or slot = "001" then ena_vidgen <= '1'; end if;
+--   	end if;
+--   end process;
+------------------------------------------------------------------------------
+-- `slot` is reused as the 1-in-8 divider (it had no reader outside this block).
+-- `slot24` never had a reader at all; it is kept ticking only so the signal is
+-- not left undriven.
 process (clock_18)
 begin
 	if rising_edge(clock_18) then
+		slot24     <= slot24 + "00001";
+		slot       <= slot + "001";
 		ena_vidgen <= '0';
-		if slot = "100" or slot = "001" then ena_vidgen <= '1'; end if;
+		if slot = "111" then ena_vidgen <= '1'; end if;
 	end if;
 end process;
 
@@ -713,6 +753,7 @@ port map(
 	adc_din          => adc_din_w,
 	adc_intr_n       => adc_intr_n_w,
 	watchdog_wr      => watchdog_wr_w,
+	sub_illegal      => sub_illegal,   -- ILLEGAL-SCREAM-2026-08-09
 	ioctl_addr       => cpu_ioctl_addr,
 	ioctl_data       => dn_data,
 	rom_wr           => cpu_rom_wr,

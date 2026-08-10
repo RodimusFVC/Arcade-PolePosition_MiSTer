@@ -183,7 +183,14 @@ assign {SDRAM_DQ, SDRAM_A, SDRAM_BA, SDRAM_CLK, SDRAM_CKE, SDRAM_DQML, SDRAM_DQM
 assign VGA_F1    = 0;
 assign VGA_SCALER= 0;
 assign USER_OUT  = '1;
-assign LED_USER  = rom_download;
+// ILLEGAL-SCREAM-2026-08-09: LED_USER now also lights, and STAYS lit, if either
+// Z8002 sub hits an unimplemented opcode. z8002.sv's S_ILLEGAL is a terminal
+// state with mreq deasserted -- the sub stops dead and silently, and the only
+// visible symptom is frozen road/sprite/view buffers, which reads as a video
+// bug. That cost weeks on the 4D01 (CP addr,#imm16) gap. If this LED is on,
+// stop debugging the picture and go find the missing opcode.
+wire sub_illegal;
+assign LED_USER  = rom_download | sub_illegal;
 assign LED_DISK  = 0;
 assign LED_POWER = 0;
 assign BUTTONS   = 0;
@@ -236,7 +243,14 @@ localparam CONF_STR = {
 	// slots with Pause on joy[9], the MRA has 8 with Pause on joy[11]/L).
 	// Accelerate/Brake are ANALOG on the real cabinet -- digital placeholders
 	// for now (also on the D-pad); move to L2/R2 when analog input is wired.
-	"J1,Accelerate,Brake,Gear,Not Used,Coin,Start 1P,Start 2P,Pause;",
+	// CONTROLS-2026-08-09: slot 4 was "Not Used" here and "-" in the MRA -- the two
+	// disagreed despite the 08-05 sync note above, and an empty slot is a mapping
+	// hazard (a placeholder that the mapper treats as absent shifts every later
+	// entry down one physical button, which is what put Coin on Y instead of
+	// Select). Slot 4 is now Service Mode = MAME IN0 bit 7 (PORT_SERVICE, the
+	// cabinet self-test toggle) on physical Y. Keep this list and the MRA
+	// <buttons> element character-for-character identical.
+	"J1,Accelerate,Brake,Gear,Service Mode,Coin,Start 1P,Start 2P,Pause;",
 	"jn,A,B,X,Y,Select,Start,R,L;",
 
 	"V,v",`BUILD_DATE
@@ -383,8 +397,28 @@ wire m_down1  = joystick_0[2]  | key_p1_down;
 wire m_up1    = joystick_0[3]  | key_p1_up;
 // wire m_accelerate1 = joystick_0[4];
 // wire m_break1 = joystick_0[5];
-wire m_gear1  = joystick_0[6]  | key_p1_fire | key_p1_bomb;
-// joystick_0[7]; NOT USED
+// GEAR-TOGGLE-2026-08-09: the shifter is a LATCHING switch, not a momentary button.
+// MAME polepos.cpp:503 declares it PORT_BIT(0x02,...,IPT_BUTTON3) POLEPOS_TOGGLE, and
+// :252 is `#define POLEPOS_TOGGLE PORT_TOGGLE` -- each press flips Lo<->Hi and it HOLDS.
+// Passing the raw button straight through meant the core only saw the gear changed for
+// as long as the button was physically held, so it always sprang back to Lo.
+// Powers up 0 = Lo (matches MAME's PORT_TOGGLE off state -> in0_byte bit1 reads 1,
+// inactive on the active-low IN0). Not reset-gated: `reset` is declared further down
+// this file, and power-on init already lands in Lo.
+wire m_gear_btn = joystick_0[6] | key_p1_fire | key_p1_bomb;
+reg  m_gear_btn_d = 1'b0;
+reg  m_gear1      = 1'b0;
+always @(posedge clk_sys) begin
+	m_gear_btn_d <= m_gear_btn;
+	if (m_gear_btn & ~m_gear_btn_d) m_gear1 <= ~m_gear1;   // flip on press (rising edge)
+end
+// CONTROLS-2026-08-09: joystick_0[7] was NOT USED. It is now Service Mode (MRA /
+// CONF_STR slot 4, physical Y) = MAME IN0 bit 7, PORT_SERVICE -- the cabinet's
+// self-test toggle. On the real machine this is a SWITCH, so the game samples it
+// continuously: HOLD the button to stay in test mode. OR'd with the existing OSD
+// toggle (status[6], "Service Mode" in CONF_STR) so it can also be latched from
+// the menu. poleposition.vhd inverts it into in0_byte bit7 (active-low on IN0).
+wire m_service_mode = joystick_0[7];
 wire m_coin1  = joystick_0[8]  | key_coin1;
 wire m_start1 = joystick_0[9]  | key_start1;
 // joystick_1[9] is P2's own Start button (MRA slot 6 on the second pad); it means
@@ -627,6 +661,7 @@ poleposition poleposition
 	.clock_18(clk_sys),
 	.reset(reset),
 	.wdog_en(wdog_en),
+	.sub_illegal(sub_illegal),   // ILLEGAL-SCREAM-2026-08-09
 
 	.dn_addr(ioctl_addr[16:0]),
 	.dn_data(ioctl_dout),
@@ -675,8 +710,11 @@ poleposition poleposition
 
 	.audio(audio),
 
-	.self_test(status[6]),
+	// CONTROLS-2026-08-09: OSD toggle OR the new Service Mode button (physical Y).
+	.self_test(status[6] | m_service_mode),
 
+	// NOTE: `service` is MAME IN0 bit 6 = IPT_SERVICE1, the service-CREDIT button --
+	// a DIFFERENT control from the self-test switch above. Still keyboard-only (9).
 	.service(key_service),
 	.coin1(m_coin1),
 	.coin2(m_coin2),

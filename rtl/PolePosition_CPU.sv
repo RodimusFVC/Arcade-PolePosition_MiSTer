@@ -83,6 +83,13 @@ module PolePosition_CPU
     // ---- watchdog (0xA100) -----------------------------------------------------
     output wire        watchdog_wr,
 
+    // ---- ILLEGAL-SCREAM-2026-08-09 ---------------------------------------------
+    // Sticky "one of the Z8002 subs hit an unimplemented opcode" flag. z8002.sv's
+    // S_ILLEGAL is a TERMINAL state with mreq deasserted -- the sub just stops dead,
+    // silently. Without this the only symptom is frozen road/sprite/view buffers,
+    // which reads as a rendering bug. Routed to LED_USER at the top level.
+    output wire        sub_illegal,
+
     // ---- ROM load (ioctl) — maincpu region of the index-0 stream (0x0000-0x2FFF)
     input  wire [24:0] ioctl_addr,
     input  wire  [7:0] ioctl_data,
@@ -237,6 +244,8 @@ module PolePosition_CPU
     //  safely, same as the prog_rom instance above — only address_b/clock_b
     //  need an explicit connection since those VHDL ports have no default).
     //------------------------------------------------------------------------
+    wire sub1_illegal_w, sub2_illegal_w;   // ILLEGAL-SCREAM-2026-08-09
+
     wire [7:0] nvram_D;
     dpram_dc #(.widthad_a(11), .init_file("rtl/ram_rom/pp_nvram_ff.mif")) nvram
     (
@@ -360,9 +369,16 @@ module PolePosition_CPU
         .dbg1_ir      (), .dbg2_ir      (),
         .dbg1_fcw     (), .dbg2_fcw     (),
         .dbg1_retire  (), .dbg2_retire  (),
-        .dbg1_illegal (), .dbg2_illegal (),
+        // ILLEGAL-SCREAM-2026-08-09: these were BOTH left open, so a Z8002
+        // S_ILLEGAL (a silent terminal hang) was completely invisible on
+        // hardware -- it presented as a video bug and cost weeks. Surfaced now
+        // and routed to LED_USER in Arcade-PolePosition.sv. Latched in z8002.sv,
+        // so once lit it stays lit until reset.
+        .dbg1_illegal (sub1_illegal_w), .dbg2_illegal (sub2_illegal_w),
         .dbg1_regs    (), .dbg2_regs    ()
     );
+
+    assign sub_illegal = sub1_illegal_w | sub2_illegal_w;
 
 endmodule
 

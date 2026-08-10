@@ -20,7 +20,7 @@ function automatic [15:0] lookup_cycles(input [15:0] din);
     else if (din[15:8]==8'h76 && din[7:4]==4'h0) lookup_cycles = 16'd12;
     else if (din[15:8]==8'h76 && din[7:4]!=4'h0) lookup_cycles = 16'd13;
     else if (din[15:8]==8'h71 && din[7:4]!=4'h0) lookup_cycles = 16'd14;
-    else if (din[15:8]==8'h5E) lookup_cycles = 16'd7;
+    else if (din[15:8]==8'h5E) lookup_cycles = (din[7:4]==4'h0) ? 16'd7 : 16'd8; // BATCH 16: direct(Z5E_0000_cccc_addr)=7 vs indexed(Z5E_ddN0_cccc_addr)=8, per z8000tbl.hxx -- was previously undifferentiated (7 for both), harmless before the JP indexed FIX since the wrong-target bug never got real test coverage to notice the cycle mismatch either.
     else if (din[15:8]==8'h61 && din[7:4]==4'h0) lookup_cycles = 16'd9;
     else if (din[15:8]==8'h6F && din[7:4]==4'h0) lookup_cycles = 16'd11;
     else if (din[15:8]==8'h0D && din[3:0]==4'h5 && din[7:4]!=4'h0) lookup_cycles = 16'd11;

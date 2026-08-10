@@ -134,7 +134,7 @@
         <part crc="2401c817" name="pp1-4.9h"/>    <!-- user1 sync chain   0x100 -->
     </rom>
 
-    <!-- Index 5: sound sample ROMs (indices 3+4 reserved for hiscore/nvram) -->
+    <!-- Index 5: sound sample ROMs -->
     <rom index="5" md5="none" zip="polepos.zip">
         <!-- engine sound 0x4000 -->
         <part crc="b5ad4d5f" name="pp1_15.6a"/>
@@ -146,11 +146,7 @@
         <part repeat="8192">00</part>
     </rom>
 
-    <!-- Index 6: Namco 5xxx MCU internal mask ROMs (MB88 family). Separate device zips
-         (user-added): namco51/52/53/54.zip. Each holds one 0x400 file. 51xx+53xx are
-         needed for Z80 boot (coin/DSW/steering I/O); 54xx is engine-noise (sound);
-         52xx is the sample-player MCU program (needs the "52xx voice" data ROM in
-         index 5 too - that part was already present, only this firmware was missing). -->
+    <!-- Index 6: Namco 5xxx MCU internal mask ROMs -->
     <rom index="6" md5="none" zip="namco51.zip|namco52.zip|namco53.zip|namco54.zip">
         <part crc="c2f57ef8" name="51xx.bin"/>   <!-- coin/credit I/O -->
         <part crc="b326fecb" name="53xx.bin"/>   <!-- steering/DSW I/O -->
@@ -158,26 +154,6 @@
         <part crc="3257d11e" name="52xx.bin"/>   <!-- sample player, lands @0xC00 -->
     </rom>
 
-    <!-- DIP switches. Byte 0 = DSWA, byte 1 = DSWB (Arcade-PolePosition.sv routes
-         ioctl index 254 addr0 -> dip_switch_a, addr1 -> dip_switch_b).
-
-         ** SOURCE: MAME's *poleposa* INPUT_PORTS, NOT the `polepos` one. **
-         The World set uses the Atari port table; polepos.cpp:2556 reads
-         GAME( 1982, polepos, 0, polepos, poleposa, ... ). The two tables carry the
-         same settings at opposite ends of the byte (Coin A is 0x07 in `polepos`
-         but 0xe0 in `poleposa`), so reading the wrong block puts every field in
-         the wrong place. Values below transcribed from polepos.cpp:575-623.
-
-         The core applies NO inversion to these bytes as of DSW-DIRECT-2026-08-06,
-         so each byte here IS the value MAME's CPU reads, and each ids list is in
-         raw field order (index 0 = field value 0).
-
-         Defaults FF,74 are MAME's own: 1C/1C, 1C/1C, 90 secs, 3 laps / Practice
-         Rank B, Extended Rank C, mph, Demo Sounds On.
-
-         ** bits="lo,hi" is an INCLUSIVE RANGE, not a list. ** A three-bit field is
-         bits="5,7"; writing bits="5,6,7" silently truncates. Bit numbering runs
-         across the whole word: DSWA = bits 0-7, DSWB = bits 8-15. -->
     <switches default="FF,74">
         <!-- DSWA (byte 0) -->
         <dip name="Coin A"        bits="5,7"   ids="Free Play,2C/1C,3C/2C,1C/2C,4C/3C,1C/3C,3C/1C,1C/1C"/>
@@ -191,13 +167,8 @@
         <dip name="Demo Sounds"   bits="8,8"   ids="On,Off"/>
     </switches>
 
-    <!-- Steering, accelerator and brake are ANALOG on the real cabinet (MAME
-         IPT_DIAL / IPT_PEDAL / IPT_PEDAL2) and are still digital placeholders in
-         the core, so not represented here. Gear is a real digital button and as of
-         GEAR-FIX-2026-08-06 slot 3 finally reaches IN0 bit1 (it used to land on a
-         DIP bit while Accelerate drove the gear). -->
-    <buttons names="Accelerate,Brake,Gear,-,Coin,Start 1P,Start 2P,Pause" default="A,B,X,Y,Select,Start,R,L"/>
+    <buttons names="Accelerate,Brake,Gear,Service Mode,Coin,Start 1P,Start 2P,Pause" default="A,B,X,Y,Select,Start,R,L"/>
 
-    <remark>Pole Position (Namco, World) — main set. Variants (polepos2, bootlegs) deferred.</remark>
+    <remark>Pole Position (Namco, World)</remark>
     <mratimestamp>20260711000000</mratimestamp>
 </misterromdescription>
