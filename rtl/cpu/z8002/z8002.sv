@@ -2092,9 +2092,22 @@ module z8002
                 end
                 // ---- LDL RRd,RRs (0x94, full range) : MAME Z94_ssss_dddd ----
                 // single-cycle reg-pair move, no memory access. No flags.
+                // LDL-SRC-PAIR-FIX-2026-08-10 --------------------------------------
+                // The SOURCE register field is nibble din[7:4]. Forcing it to an even
+                // pair base is {din[7:5],1'b0} -- the derivation used everywhere else
+                // in this file, and used correctly for the DESTINATION ({din[3:1],1'b0})
+                // on the very next line. This read {din[6:4],1'b0}: one bit too low.
+                //   ldl rr0,rr2 (0x9420): src should be {001,0}=RR2, got {010,0}=RR4
+                //   ldl rr2,rr8 (0x9482): src should be {100,0}=RR8, got {000,0}=RR0
+                // Silent-wrong, never hangs -- same class as the 4D01 and indexed-JP
+                // gaps. Found via pp_sub1.asm 0x0034 `ldl rr0,rr2` leaving rr0 at zero,
+                // which zeroed the road-curve step (rr2 stuck at 4*orig instead of
+                // 5*orig, rr0 at 0x0080 instead of 20*orig) and made every per-scanline
+                // road xoffs garbage. MAME Z94_ssss_dddd: RL(dst) = RL(src).
+                // Original: rwb0_val=R[{din[6:4],1'b0}]; rwb1_val=R[{din[6:4],1'b0}+4'd1];
                 else if (din[15:8]==8'h94) begin
-                    rwb0_we=1'b1; rwb0_idx={din[3:1],1'b0};      rwb0_val=R[{din[6:4],1'b0}];
-                    rwb1_we=1'b1; rwb1_idx={din[3:1],1'b0}+4'd1; rwb1_val=R[{din[6:4],1'b0}+4'd1];
+                    rwb0_we=1'b1; rwb0_idx={din[3:1],1'b0};      rwb0_val=R[{din[7:5],1'b0}];
+                    rwb1_we=1'b1; rwb1_idx={din[3:1],1'b0}+4'd1; rwb1_val=R[{din[7:5],1'b0}+4'd1];
                     pc<=pc2; retire<=1'b1;
                 end
                 // ---- LDL RRd,#imm32 (0x14, NIB2=0) : MAME Z14_0000_dddd_imm32 ----

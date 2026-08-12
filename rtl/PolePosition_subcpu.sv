@@ -428,6 +428,46 @@ module PolePosition_subcpu
     end
     assign scan_road_dout = {road_hi_qb, road_lo_qb};
 
+/* DIAG-REVERT-2026-08-10: REVERTED 2026-08-10 (original restored above).
+   Kept commented for re-use -- it forces a known-good straight road and is the
+   fastest way to re-split "renderer vs CPU data" if the road misbehaves again.
+   Its result WAS the decisive clue: with xoffs pinned constant the picture lost
+   ALL vertical variation (uniform stripes), which proved the road ROM planes
+   were misaligned -- fixed by GFX-LOAD-OFFSET-FIX-2026-08-10 in
+   Arcade-PolePosition.sv.
+   To re-enable: comment out the assign above and uncomment this block.
+   -----------------------------------------------------------------------
+    // DIAG: force the road generator's steering data to a known-good straight
+    // road, bypassing whatever the sub-CPUs wrote. Splits the garbled-road bug
+    // in ONE hardware build:
+    //   * road draws clean  => pp_road_gen + road ROM + road palette are all
+    //     GOOD on real silicon, and the garbage is 100% the sub-CPU writes into
+    //     road16_memory. Stop looking at the renderer.
+    //   * road still garbled => the fault is in the HW-only part of the path
+    //     (scan_road addressing, palette, composite) -- something the Verilator
+    //     road rig does not cover.
+    // Basis: pp_road_gen is bit-exact vs MAME draw_road() on the REAL road ROM
+    // (32,768 px, 0 mismatches, verilator/road `make view`), so the renderer is
+    // already exonerated in sim -- this confirms it on hardware.
+    //
+    // road16_memory layout (MAME draw_road):
+    //   0x000-0x1FF : yoffs -> roadpal in bits [3:0]
+    //   0x380+y     : per-scanline X offset, & 0x3FF. Bit 0x200 set = blank
+    //                 line, so a road only draws for values < 0x200.
+    // A CONSTANT offset = a perfectly straight road; the ROM rows supply the
+    // perspective. Tweak DIAG_ROAD_XOFFS if the road sits off-centre.
+    // VALIDATED 2026-08-10 by verilator/road `make view`: these exact two values
+    // render a correct road (green grass, grey surface, red/white rumble stripes
+    // converging to a vanishing point) identical to the MAME draw_road oracle.
+    // roadpal 0 was the FIRST guess and is wrong -- it is a flat bank. Bank 1 has
+    // 6 distinct colours and is the road bank.
+    localparam [15:0] DIAG_ROAD_XOFFS = 16'h0100;
+    localparam [15:0] DIAG_ROAD_PAL   = 16'h0001;
+    assign scan_road_dout = (scan_road_addr >= 10'h380) ? DIAG_ROAD_XOFFS
+                          : (scan_road_addr <  10'h200) ? DIAG_ROAD_PAL
+                          : 16'h0000;
+   ----------------------------------------------------------------------- */
+
     // ---- alpha (0x400 words, 10-bit) ----
     always @(posedge clk) begin
         if (we_alpha_lo) alpha_lo[pa_addr10] <= pa_wdlo;

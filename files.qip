@@ -20,6 +20,8 @@ set_global_assignment -name SYSTEMVERILOG_FILE rtl/namco/namco_54xx.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/namco/namco_52xx.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/namco/namco_wsg8.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/sound/pp_engine_snd.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/sound/pp_voice52_snd.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/sound/pp_noise54_snd.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/video/bg_palette_msb.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/video/bg_palette_lsb.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/video/gen_video.sv

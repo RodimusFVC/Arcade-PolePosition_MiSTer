@@ -564,6 +564,19 @@ end
 wire [16:0] sprgfx_addr;
 reg  [7:0]  sprgfx_data;
 reg  [7:0]  sprite_rom [0:81919];  // 0x14000
+// GFX-LOAD-OFFSET-2026-08-10: TRIED 0x2000-HIGHER OFFSETS AND REVERTED -- WRONG.
+// The MRA's index-1 HEADER COMMENT claims road@0x16000 / scalelut@0x1B000 with
+// bigsprites 0x10000. That comment is WRONG. The MRA's actual <part> list emits
+// bigsprites as 3 parts (0x6000) + <part repeat="8192">00</part> (0x2000) +
+// 3 parts (0x6000) = 0xE000, NOT 0x10000: MAME's bigsprites REGION is 0x10000 but
+// its last ROM_LOAD ends at 0xDFFF (polepos.cpp:28-34), and the MRA does not pad
+// the trailing 0x2000. True stream layout is therefore:
+//   chars 0x0000 | tiles 0x1000 | sprites 0x2000 | bigsprites 0x6000..0x13FFF
+//   road 0x14000..0x18FFF | scalelut 0x19000..0x19FFF
+// The offsets below are CORRECT. Trust the <part> list, never the header table.
+// The internal 0x2000 gap lands at sprite_rom[0xA000-0xBFFF] and the trailing
+// 0x2000 at sprite_rom[0x12000-0x13FFF] (never written = zeros), both matching
+// MAME's region layout exactly.
 wire        sprite_wr = ioctl_wr & (ioctl_index == 8'd1) & (ioctl_addr >= 25'h2000) & (ioctl_addr < 25'h14000);
 always @(posedge clk_sys) begin
 	if (sprite_wr) sprite_rom[ioctl_addr - 25'h2000] <= ioctl_dout;

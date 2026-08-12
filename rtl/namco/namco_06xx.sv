@@ -115,7 +115,21 @@ module namco_06xx
         end else if (ctrl_apply) begin
             // ctrl_w_sync equivalent (deferred write commits now)
             ctrl    <= ctrl_wdata_d;
-            div_cnt <= 7'd0;            // simplified "delay to next falling clock edge" re-arm
+            // CTRL-REARM-FIX-2026-08-10: REVERTED SAME DAY -- measurably WORSE.
+            // The change made two things match namco06.cpp:186-223 more closely:
+            //   (a) div_cnt <= ((1<<(ctrl_wdata_d[7:5]-1))-1), i.e. preloaded to the
+            //       limit so the first toggle lands on the NEXT base tick,
+            //       matching MAME's adjust(delay_to_next_clock_edge, 0, period),
+            //       instead of waiting a full period;
+            //   (b) timer_state reset moved into the disabled branch ONLY, since
+            //       MAME carries the parity over on an enabled ctrl write.
+            // Both are arguably more faithful, but measured on the 51xx reply
+            // corruption they made it WORSE, per 100 frames:
+            //     $810C wrong 10.7 -> 14.4    $810D wrong 10.5 -> 16.8
+            // Restored to the 2026-08-09 behaviour, which is the better baseline.
+            // If revisiting, bisect (a) and (b) separately -- they were never
+            // measured independently.
+            div_cnt <= 7'd0;
             timer_state <= 1'b0;
             if (ctrl_wdata_d[7:5] == 3'b000) begin
                 // disabled: stop timer, clear NMI + all chipsels; RW left as-is (MAME comment)
@@ -160,7 +174,43 @@ module namco_06xx
     wire [7:0] d3 = ctrl[3] ? chip3_din : 8'hFF;
     wire [7:0] data_r_val = d0 & d1 & d2 & d3;
 
-    assign cpu_din = ctrl_rd ? ctrl : (ctrl[4] ? data_r_val : 8'h00);
+    // ---- N06-DATAHOLD-2026-08-11: A/B SWITCH #1 ---------------------------
+    // data_r_val above is a FREE-RUNNING combinational tap of the 51xx's live
+    // `mailbox` register: nothing holds the reply byte still for the duration of
+    // a transfer, so the Z80 samples whatever the MCU happens to hold at that
+    // instant. Measured symptom this targets: a slipped burst reads
+    // `74, 74, FF` instead of `7F, 74, FF` -- the SAME mailbox value twice,
+    // missing one entirely (~8% of reads, periodic 3/4/13 beat).
+    //
+    // MAME is structurally identical here but NOT behaviourally: it evaluates
+    // data_r() at a scheduler-defined instant with the MCU advanced to exactly
+    // that point. Real concurrent hardware has no such guarantee.
+    //
+    //   HOLD_MODE 0 = OFF, the pre-2026-08-11 free-running tap (baseline)
+    //   HOLD_MODE 1 = capture at select-window CLOSE. The MCU has had the whole
+    //                 window to respond; the Z80 reads it during the NEXT window.
+    //   HOLD_MODE 2 = capture at select-window OPEN, i.e. the value the MCU
+    //                 settled on during the PREVIOUS window.
+    // 1 and 2 differ by one transfer of pipelining. I do not know which matches
+    // the real 06xx's data latch, so both are exposed rather than guessed --
+    // and CTRL-REARM-FIX-2026-08-10 is the standing warning about shipping a
+    // "more faithful" 06xx change without measuring it.
+    localparam HOLD_MODE = 1;
+
+    wire win_close = enabled && base_ce && !pause && (div_cnt == div_limit) &&  timer_state;
+    wire win_open  = enabled && base_ce && !pause && (div_cnt == div_limit) && ~timer_state;
+
+    reg [7:0] data_r_hold;
+    always @(posedge clk) begin
+        if (reset)                                  data_r_hold <= 8'hFF;
+        else if (HOLD_MODE == 1 ? win_close : win_open) data_r_hold <= data_r_val;
+    end
+
+    wire [7:0] data_r_sel = (HOLD_MODE == 0) ? data_r_val : data_r_hold;
+
+    // N06-DATAHOLD-2026-08-11: original below, restore with HOLD_MODE = 0
+    // assign cpu_din = ctrl_rd ? ctrl : (ctrl[4] ? data_r_val : 8'h00);
+    assign cpu_din = ctrl_rd ? ctrl : (ctrl[4] ? data_r_sel : 8'h00);
 
     // ---- data_w: deferred broadcast to selected chips in write mode -------
     reg [7:0] chip_dout_r;

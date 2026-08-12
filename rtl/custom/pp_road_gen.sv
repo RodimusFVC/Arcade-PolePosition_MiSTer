@@ -71,13 +71,20 @@ module pp_road_gen
     //  display bank = vpos[0], generate bank = ~vpos[0].
     reg [9:0] linebuf [0:1023];         // {gbank, wptr[8:0]} = bank*512 + pixel (pixel 0..263)
     reg [2:0] xscroll_bank [0:1];       // per-buffer xscroll (xoffs & 7)
+    reg [9:0] xoffs_bank   [0:1];       // XOFFS-BAR-DIAG-2026-08-10: full per-line xoffs
 
     // ======================= generation FSM (clk-paced) ====================
     localparam [3:0] G_IDLE=0, G_SET0=1, G_SET1=2, G_CHUNK=3, G_RDC=4,
                      G_RDB1=5, G_RDB2=6, G_PIX=7, G_FILL=8, G_DONE=9,
     // SCAN-LATENCY-FIX-2026-08-06: G_SET0W/G_SET1W are wait states that absorb the
     // 1-clock latency of the scan_road read (see the assign below).
-                     G_SET0W=10, G_SET1W=11;
+                     G_SET0W=10, G_SET1W=11,
+    // ROMLATENCY-FIX-2026-08-11: G_RDB3 absorbs the SAME 1-clock latency for the
+    // road ROM port that SCAN-LATENCY-FIX-2026-08-06 fixed for scan_road. The
+    // captures were all one fetch early: ctrl_b took the pre-edge bus value
+    // (0x00), b1_b took the CONTROL byte, b2_b took the BITS1 byte. Measured
+    // 2026-08-11: 497/498 chunks mismatched road.bin in exactly that pattern.
+                     G_RDB3=12;
     reg [3:0]  gstate;
     reg [8:0]  ygen;                    // scanline being generated
     reg        gbank;                   // bank being written (= ~display parity)
@@ -140,6 +147,7 @@ module pp_road_gen
         end
         G_SET0W: begin
             xoffs <= scan_road_dout[9:0];          // xoffs = road16_memory[0x380+y] & 0x3ff
+            xoffs_bank[gbank] <= scan_road_dout[9:0];   // XOFFS-BAR-DIAG-2026-08-10
             gstate <= G_SET1;
         end
         G_SET1: begin                              // drives scan_road_addr = yoffs
@@ -165,17 +173,31 @@ module pp_road_gen
                 gstate <= G_RDC;
             end
         end
+        // ROMLATENCY-FIX-2026-08-11 -----------------------------------------
+        // road_rom_data is a REGISTERED read: the byte for the address issued in
+        // state N only becomes visible at the END of state N+1. The old code
+        // captured in state N+1, which latches the PREVIOUS address's byte --
+        // every capture was one fetch early. Each read now issues its address one
+        // state ahead of its capture, and G_RDB3 catches the last one.
+        //   G_CHUNK issues ctrl addr | G_RDC issues bits1 addr (no capture)
+        //   G_RDB1  captures ctrl, issues bits2 addr
+        //   G_RDB2  captures bits1
+        //   G_RDB3  captures bits2, seeds roadval/carin
+        // Cost: one extra state per chunk -> 33*13 = 429 clk of the 3072 clk line.
         G_RDC: begin
-            ctrl_b        <= road_rom_data;        // captured (1-clk after addr)
             road_rom_addr <= 15'h2000 + {2'd0, romoffs};   // bits1 @ 0x2000+romoffs
             gstate <= G_RDB1;
         end
         G_RDB1: begin
-            b1_b          <= road_rom_data;
+            ctrl_b        <= road_rom_data;        // control, now genuinely valid
             road_rom_addr <= 15'h4000 + {3'd0, b2off};     // bits2 @ 0x4000+b2off
             gstate <= G_RDB2;
         end
         G_RDB2: begin
+            b1_b   <= road_rom_data;
+            gstate <= G_RDB3;
+        end
+        G_RDB3: begin
             b2_b    <= road_rom_data;
             roadval <= ctrl_b[5:0];                // roadval = control & 0x3f
             carin   <= ctrl_b[7];                  // carin = control >> 7
@@ -239,7 +261,33 @@ module pp_road_gen
     wire [8:0]  rd = {1'b0, hpos[7:0]} + {6'd0, xscroll_bank[disp_bank]};  // scanline[xscroll+x]
     reg  [9:0]  road_index_r;
     always @(posedge clk) road_index_r <= linebuf[{disp_bank, rd}];
-    assign road_index  = road_index_r;
+
+    // XOFFS-BAR-DIAG-2026-08-10 ------------------------------------------------
+    // The road renderer is PROVEN correct (bit-exact vs MAME draw_road on the real
+    // road ROM, verilator/road `make view`), and the ioctl ROM offsets are proven
+    // correct. The ONE input never observed on hardware is what the sub-CPUs write
+    // into road16_memory -- the CHA0-CHA9 lines on operators-manual Sheet 12B.
+    // The rig cannot reach gameplay and FPGA RAM cannot be dumped, so render it:
+    // each road scanline becomes a horizontal BAR whose length = that line's
+    // xoffs (10-bit, scaled >>2 to fit 256 px). ONE screenshot then shows all 128
+    // per-line values at once -- satisfies the "make a single still informative"
+    // capture constraint.
+    //   * bars form a smooth curve  => the CPU is writing sane road data, and the
+    //     fault is further down (vscroll, roadpal, or the ROM read on HW).
+    //   * bars are noise / flat / all >= 0x200 (full-width) => the sub-CPUs are
+    //     writing garbage, and the road bug is a CPU-side problem, not video.
+    // Set DIAG_XOFFS_BAR = 1'b0 to restore normal rendering (single line, below).
+    localparam DIAG_XOFFS_BAR = 1'b0;
+    wire [9:0] xo_disp   = xoffs_bank[disp_bank];
+    wire       bar_on    = ({2'b00, hpos[7:0]} < {2'b00, xo_disp[9:2]});
+    // Pen choice MATTERS: the whole road palette resolves to only EIGHT distinct
+    // colours, and pens 0x00 / 0x3F / 0x40 / 0x7F ALL map to the same grass green
+    // (67,157,14) -- picking those gave a solid green screen with no visible bars.
+    // Verified against palette.bin: pen 10 = white (255,255,255), pen 0 = green.
+    // Use ABSOLUTE pen indices, not the line's own bank, so contrast is guaranteed.
+    wire [9:0] bar_index = bar_on ? 10'd10 : 10'd0;
+
+    assign road_index  = DIAG_XOFFS_BAR ? bar_index : road_index_r;
     assign road_active = (vpos >= 9'd128);
 
 endmodule

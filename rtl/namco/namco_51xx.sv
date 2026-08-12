@@ -80,12 +80,28 @@ module namco_51xx
     wire       o_wr_w;
     reg  [7:0] mailbox;
 
+    // O-PORT-PULSE-FIX-2026-08-10 -------------------------------------------
+    // O-PORT-STROBE-FIX-2026-08-09 was right to drop change-detection but made
+    // the re-latch LEVEL-sensitive. mb88_core's `o_wr` is registered inside the
+    // ce-gated block (set on outO at mb88_core.sv:219, cleared at :199), so it
+    // stays high for a whole MCU cycle = clk/32 = ~32 fabric clocks here. This
+    // block runs on bare `clk`, so it re-latched o_out ~32 times per outO. A Z80
+    // command byte landing in that window won the arbitration for exactly ONE
+    // clock and was then clobbered back to the MCU's stale o_out on the next.
+    // MAME calls O_w_sync() ONCE per outO instruction (namco51.cpp:122-125), a
+    // single event. Gating with `ena` reproduces that: o_wr_w is set on one ena
+    // tick and cleared on the next, so `o_wr_w & ena` is true for exactly one
+    // fabric clock per outO. Z80 writes on every other clock now survive.
+    //
+    // Original (2026-08-09 form) kept for revert:
+    //   if (wr_en)        mailbox <= wr_data;
+    //   else if (o_wr_w)  mailbox <= o_out_w;
     always @(posedge clk) begin
         if (!reset_n) begin
             mailbox <= 8'h00;
         end else begin
-            if (wr_en)        mailbox <= wr_data;   // Z80 write wins (matches MAME order)
-            else if (o_wr_w)  mailbox <= o_out_w;   // MCU's own outO -- EVERY write
+            if (wr_en)                mailbox <= wr_data;   // Z80 write wins (matches MAME order)
+            else if (o_wr_w && ena)   mailbox <= o_out_w;   // MCU outO: ONE latch per instruction
         end
     end
 

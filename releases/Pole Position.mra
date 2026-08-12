@@ -22,13 +22,10 @@
     <flip>no</flip>
 
     <players>1</players>
+    <buttons names="Accelerate,Brake,Gear,Service Mode,Coin,Start 1P,Start 2P,Pause" default="A,B,X,Y,Select,Start,R,L"/>
 
     <!-- ==================================================================
-         DOWNLOAD LAYOUT (the contract the core-side ROM loader must match).
-         Bytes stream via ioctl_download; ioctl_index selects the section,
-         ioctl_addr resets to 0 at the start of each index.  Region names +
-         sizes taken verbatim from MAME polepos.cpp ROM_START( polepos ).
-
+         DOWNLOAD LAYOUT
          index 0  CPU code
              0x00000  maincpu (Z80)          0x3000
              0x03000  sub1    (Z8002 #1)     0x4000   16-bit interleaved
@@ -53,10 +50,6 @@
              0x00400  53xx.bin  0x0400  (namco53.zip)  steering/DSW I/O  [Z80 boot]
              0x00800  54xx.bin  0x0400  (namco54.zip)  engine noise      [sound]
              0x00C00  52xx.bin  0x0400  (namco52.zip)  sample player     [sound]
-             (2026-07-28: the "no namco52.zip exists" note here was wrong - it's a
-              standard, commonly-dumped device ROM like 51/53/54xx, just not sourced
-              yet at the time. User has since supplied it, CRC verified 3257d11e vs
-              Useful Stuff/mame/namco52.cpp's ROM_START.)
          ================================================================== -->
 
     <!-- Index 0: CPU code — maincpu(Z80) + sub1/sub2(Z8002, big-endian 16-bit) -->
@@ -64,27 +57,12 @@
         <!-- maincpu (Z80) 0x0000-0x2FFF -->
         <part crc="c0511173" name="pp3_9.6h"/>
         <part crc="7174bcb7" name="pp1_10b.5h"/>
-        <!-- sub1 (Z8002 #1) 0x4000, ROM_LOAD16_BYTE: even=HIGH=.8l, odd=LOW=.8m (big-endian).
-             MAP DIRECTION FIXED + HW-CONFIRMED 2026-08-05. The previous values (.8l map="10",
-             .8m map="01") were INVERTED and corrupted BOTH sub ROMs. That is what caused the
-             long-standing hardware-only self-test failure reported as "RAM 73": a sub running
-             scrambled code writes garbage to the fault mailbox at Z8002 $8092. 73 is not even a
-             legitimate fault code - the ROM can only ever emit 0..51, which matches the operator
-             manual's own Table 2-4 maxima of 31 (sub1) and 51 (sub2).
-             CONVENTION (learned the hard way, no other <interleave map=> exists in this fleet):
-             map="01" places a part on the EVEN / first output byte; map="10" places it on the
-             ODD / second. Read the map digits RIGHT-to-LEFT - rightmost digit = output byte 0.
-             The intuitive left-to-right reading is WRONG and cost weeks here.
-             Cross-checks, all agreeing with the values below: MAME polepos.cpp ROM_START
-             (.8l @0x0000 even, .8m @0x0001 odd); rebuilding this interleave byte-for-byte
-             reproduces verilator/main/pp_sub1.bin and pp_sub2.bin exactly; RTL windows
-             SUB1_BASE=0x3000 / SUB2_BASE=0x7000, maincpu block exactly 0x3000 so sub1 lands on
-             its base unshifted; dn_wr is index-0 gated (ioctl_wr & rom_download). -->
+        <!-- sub1 (Z8002 #1) 0x4000, ROM_LOAD16_BYTE: even=HIGH=.8l, odd=LOW=.8m (big-endian) -->
         <interleave output="16">
             <part crc="fafb9049" name="pp3_2.8l" map="01"/>
             <part crc="65c1c2c2" name="pp3_1.8m" map="10"/>
         </interleave>
-        <!-- sub2 (Z8002 #2) 0x4000 - same inverted-map fix, same convention as sub1 above -->
+        <!-- sub2 (Z8002 #2) 0x4000 - same inverted-map fix, same as sub1 above -->
         <interleave output="16">
             <part crc="acc1ebc3" name="pp3_6.4l" map="01"/>
             <part crc="46e5c99a" name="pp3_5.4m" map="10"/>
@@ -167,7 +145,6 @@
         <dip name="Demo Sounds"   bits="8,8"   ids="On,Off"/>
     </switches>
 
-    <buttons names="Accelerate,Brake,Gear,Service Mode,Coin,Start 1P,Start 2P,Pause" default="A,B,X,Y,Select,Start,R,L"/>
 
     <remark>Pole Position (Namco, World)</remark>
     <mratimestamp>20260711000000</mratimestamp>

@@ -13,7 +13,9 @@
 -- all of that is long obsolete, so it is corrected here rather than left to
 -- mislead): the renderer is pp_video_composite (alpha + view + road + sprites),
 -- the 06xx bus with 51xx/52xx/53xx/54xx is live, and audio is namco_wsg8 mixed
--- with pp_engine_snd. Still absent: the 52xx/54xx analog "discrete" outputs.
+-- with pp_engine_snd. VOICE52-2026-08-11: the 52xx's analog "discrete" output is
+-- now modelled too (pp_voice52_snd.sv), so voice samples are audible. Still
+-- absent: the 54xx analog "discrete" outputs (crash/explosion noise).
 ---------------------------------------------------------------------------------
 -- Educational use only. Do not redistribute synthetized file with roms.
 ---------------------------------------------------------------------------------
@@ -242,6 +244,21 @@ architecture struct of poleposition is
  -- derived from the existing cen (clock_18/16, the Z80/Z8002 CE) by toggling once
  -- more per cen pulse.
  signal mcu_div : std_logic := '0';
+ -- MCU-DIV6-2026-08-11: A/B SWITCH #2. `cen` is 3.072 MHz. The old divider gave
+ -- mcu_ena = cen/2 = 1.536 MHz, which is the MB88's *PIN* clock. But mb88_core
+ -- retires a 1-byte instruction per `ena` pulse, while mb88xx.h:125-126 charges
+ -- it one MACHINE cycle = 6 pin clocks -- so all four Namco MCUs have been
+ -- running ~6x too fast. Correct machine-cycle rate = 1.536/6 = 256 kHz = cen/12.
+ --   MCU_CEN_DIV = 12  -> MAME-correct 256 kHz
+ --   MCU_CEN_DIV =  2  -> the pre-2026-08-11 behaviour (restore with this one edit)
+ -- NOTE: Kangaroo drives the same core at its raw 2.5 MHz Z80 enable and works,
+ -- so a missing /6 is not automatically fatal -- it should only bite where the
+ -- MCU is in a tight handshake with the CPU, i.e. the 51xx reply burst.
+ -- 2026-08-11 build #2: set to 12 (MAME-correct 256 kHz machine-cycle rate) now
+ -- that HOLD_MODE = 1 is HW-CONFIRMED as the controls fix and is the established
+ -- baseline. This build therefore still isolates ONE variable.
+ constant MCU_CEN_DIV : integer := 12;
+ signal mcu_div_cnt : integer range 0 to 15 := 0;
  signal mcu_ena : std_logic;
 
  -- Namco WSG (8-voice, rtl/namco_wsg8.sv). u_pp_cpu's sound_en/wsg_* ports
@@ -255,7 +272,17 @@ architecture struct of poleposition is
  signal engine_msb_wr_w : std_logic;
  signal wsg_audio_w     : std_logic_vector(15 downto 0);
  signal engine_audio_w  : std_logic_vector(15 downto 0);
- signal audio_mix_s     : signed(16 downto 0);
+ -- VOICE52-2026-08-11: third voice. n52_p_w is the 52xx's OUT0-OUT3 audio pins,
+ -- which were connected to `open` until now (hence: no voice samples at all).
+ signal n52_p_w         : std_logic_vector(3 downto 0);
+ signal voice_audio_w   : std_logic_vector(15 downto 0);
+ -- NOISE54-2026-08-11: fourth voice. The 54xx's three discrete level outputs,
+ -- likewise connected to `open` until now (hence: no screech/crash/rumble).
+ signal n54_o0_w        : std_logic_vector(3 downto 0);
+ signal n54_o1_w        : std_logic_vector(3 downto 0);
+ signal n54_r1_w        : std_logic_vector(3 downto 0);
+ signal noise_audio_w   : std_logic_vector(15 downto 0);
+ signal audio_mix_s     : signed(17 downto 0);
  signal wsg_addr_w  : std_logic_vector(5 downto 0);
  signal wsg_dout_w  : std_logic_vector(7 downto 0);
  signal wsg_wr_w    : std_logic;
@@ -377,6 +404,32 @@ architecture struct of poleposition is
    din       : in  std_logic_vector(7 downto 0);
    rom_addr  : out std_logic_vector(13 downto 0);
    rom_data  : in  std_logic_vector(7 downto 0);
+   audio     : out std_logic_vector(15 downto 0)
+ );
+ end component;
+
+ -- VOICE52-2026-08-11: rtl/sound/pp_voice52_snd.sv (MAME polepos_a.cpp CHANL4).
+ -- Takes the 52xx's 4-bit PCM output pins and does DAC + filter + level.
+ component pp_voice52_snd
+ port(
+   clk       : in  std_logic;
+   reset     : in  std_logic;
+   pause     : in  std_logic;
+   p_data    : in  std_logic_vector(3 downto 0);
+   audio     : out std_logic_vector(15 downto 0)
+ );
+ end component;
+
+ -- NOISE54-2026-08-11: rtl/sound/pp_noise54_snd.sv (MAME polepos_a.cpp
+ -- CHANL1/2/3). Three 4-bit levels from the 54xx -> DAC + bandpass -> one mix.
+ component pp_noise54_snd
+ port(
+   clk       : in  std_logic;
+   reset     : in  std_logic;
+   pause     : in  std_logic;
+   o0_data   : in  std_logic_vector(3 downto 0);
+   o1_data   : in  std_logic_vector(3 downto 0);
+   r1_data   : in  std_logic_vector(3 downto 0);
    audio     : out std_logic_vector(15 downto 0)
  );
  end component;
@@ -845,12 +898,47 @@ port map(
 	audio    => engine_audio_w
 );
 
+-- ---- 52xx voice ("sample player") -----------------------------------------
+-- VOICE52-2026-08-11: MAME polepos_a.cpp CHANL4. The 52xx MCU decodes the
+-- voice ROM itself and puts 4-bit PCM on its P pins (namco52.cpp:14 "OUT0-OUT3
+-- = sound output"), so this stage is only the analog tail: R1 ladder DAC,
+-- VREF offset, highpass, lowpass, level. See pp_voice52_snd.sv for the two
+-- filter deviations and for the single level knob.
+u_voice52 : pp_voice52_snd
+port map(
+	clk    => clock_18,
+	reset  => reset,
+	pause  => pause,
+	p_data => n52_p_w,
+	audio  => voice_audio_w
+);
+
+-- ---- 54xx noise (tyre screech / crash / rumble) ----------------------------
+-- NOISE54-2026-08-11: MAME polepos_a.cpp CHANL1/2/3. The 54xx MCU generates the
+-- waveform and presents three 4-bit levels; this stage is DAC + bandpass only.
+-- Channel->band mapping is load-bearing, see pp_noise54_snd.sv's header.
+u_noise54 : pp_noise54_snd
+port map(
+	clk     => clock_18,
+	reset   => reset,
+	pause   => pause,
+	o0_data => n54_o0_w,
+	o1_data => n54_o1_w,
+	r1_data => n54_r1_w,
+	audio   => noise_audio_w
+);
+
 -- ---- audio mix ------------------------------------------------------------
--- Sum in 17 bits then saturate, so the WSG keeps its previous level (a plain
--- >>1 mix would have quietly halved it) and only genuine peaks clip.
-audio_mix_s <= resize(signed(wsg_audio_w), 17) + resize(signed(engine_audio_w), 17);
-audio <= x"7FFF" when audio_mix_s >  to_signed(32767, 17) else
-         x"8000" when audio_mix_s < to_signed(-32768, 17) else
+-- Sum then saturate, so the WSG keeps its previous level (a plain >>1 mix would
+-- have quietly halved it) and only genuine peaks clip.
+-- VOICE52-2026-08-11: widened 17 -> 18 bits for the third voice.
+-- NOISE54-2026-08-11: fourth voice added. 18 bits still covers four 16-bit
+-- signed inputs (4 x 32768 = 2^17, one bit of sign headroom left).
+audio_mix_s <= resize(signed(wsg_audio_w), 18) + resize(signed(engine_audio_w), 18)
+                                               + resize(signed(voice_audio_w), 18)
+                                               + resize(signed(noise_audio_w), 18);
+audio <= x"7FFF" when audio_mix_s >  to_signed(32767, 18) else
+         x"8000" when audio_mix_s < to_signed(-32768, 18) else
          std_logic_vector(audio_mix_s(15 downto 0));
 
 -- ---- Namco 5xxx MCU clock enable (see signal declaration comment) ----------
@@ -864,12 +952,27 @@ begin
 	if rising_edge(clock_18) then
 		if reset = '1' then
 			mcu_div <= '0';
+			mcu_div_cnt <= 0;                       -- MCU-DIV6-2026-08-11
 		elsif cen = '1' then
 			mcu_div <= not mcu_div;
+			-- MCU-DIV6-2026-08-11: modulo-MCU_CEN_DIV replaces the /2 toggle.
+			-- Reset to 0 keeps the MCU-PHASE-FIX-2026-08-05 determinism.
+			if mcu_div_cnt = MCU_CEN_DIV - 1 then
+				mcu_div_cnt <= 0;
+			else
+				mcu_div_cnt <= mcu_div_cnt + 1;
+			end if;
 		end if;
 	end if;
 end process;
-mcu_ena <= cen and mcu_div and (not pause);
+-- MCU-DIV6-2026-08-11: original below, restore by setting MCU_CEN_DIV = 2 (the
+-- line itself is equivalent to the old one at that setting -- mcu_div is kept
+-- driven so the old expression can be dropped back in verbatim if needed).
+-- mcu_ena <= cen and mcu_div and (not pause);
+-- Fires on the LAST count, not the first: at MCU_CEN_DIV = 2 that is the 2nd
+-- `cen`, exactly where the old `mcu_div` toggle fired. So setting the constant
+-- back to 2 restores the previous behaviour bit-for-bit, phase included.
+mcu_ena <= '1' when (cen = '1' and mcu_div_cnt = MCU_CEN_DIV - 1 and pause = '0') else '0';
 
 -- MCUs held in reset by EITHER the system reset OR the LS259 namco_reset latch
 -- (q1, MAME reset(state) -- active-high "running", power-on default = held reset).
@@ -879,8 +982,31 @@ mcu_reset_n <= (not reset) and namco_reset_w;
 -- All physical bits are IP_ACTIVE_LOW; bit2 (auto_start) is program-controlled
 -- (sb0_w from the LS259, NOT a physical input); bit1 (Gear Change) repurposes
 -- fire1 (dead in this Namco scaffold otherwise); bits 3/0 are MAME IPT_UNUSED.
+-- AUTOSTART-POLARITY-FIX-2026-08-11: bit2 follows sb0 DIRECTLY, not inverted.
+-- Symptom it fixes: self-test printed "MANUAL START" (operators manual: "suspect
+-- the game harness"), attract/gameplay never started -- live issue #1.
+--
+-- Bit 2 is NOT a physical button. polepos.cpp:504 marks it IPT_CUSTOM "start 1,
+-- program controlled": the Z80 writes LS259 q6 ($A006 -> sb0) and reads the line
+-- back here, through the 51xx. pp_maincpu.asm $0A6F-$0A99 is a two-phase
+-- loopback test, and the messages are "AUTO START" @$11FE / "MANUAL START" @$120B:
+--     $0A72  and $04 / jr nz  -> bit2 must be 0 here, else MANUAL
+--     $0A7C  writes sb0 := 1
+--     $0A8B  and $04 / ret nz -> bit2 must be 1 there
+-- So the line must FOLLOW sb0. Inverting it fails phase 1 on the very first pass,
+-- and the only code that ever sets sb0 sits BEHIND that branch -- unescapable.
+--
+-- Why the old code looked right: MAME's auto_start_r() returns
+-- `m_auto_start_mask = !sb0`, so `not sb0_w` matches the callback literally. But
+-- the field is IP_ACTIVE_LOW, and MAME applies that inversion to custom fields
+-- too, so the byte the game sees is !(!sb0) = sb0. The two inversions cancel.
+-- Confirmed by observation, not derivation: MAME's self-test prints AUTO START
+-- (user, 2026-08-11) where ours printed MANUAL.
+-- Original below, restore by swapping the two bit-2 terms:
+-- in0_byte <= (not self_test) & (not service) & (not coin2) & (not coin1)
+--             & '1' & (not sb0_w) & (not fire1) & '1';
 in0_byte <= (not self_test) & (not service) & (not coin2) & (not coin1)
-            & '1' & (not sb0_w) & (not fire1) & '1';
+            & '1' & sb0_w & (not fire1) & '1';
 
 -- 52xx and 54xx (both built 2026-07-28) legitimately have NO read_callback<2>/<3>
 -- bound in polepos.cpp -- namco52.cpp/namco54.cpp have no read() method at all --
@@ -962,9 +1088,10 @@ port map(
 	chip_sel    => n06_chipsel(3),
 	wr_en       => n06_chip_wr(3),
 	wr_data     => n06_chip_dout,
-	discrete_o0 => open,
-	discrete_o1 => open,
-	discrete_r1 => open,
+	-- NOISE54-2026-08-11: all three were `open` (screech/crash/rumble silent)
+	discrete_o0 => n54_o0_w,
+	discrete_o1 => n54_o1_w,
+	discrete_r1 => n54_r1_w,
 	rom_wr      => mcu_rom_wr,
 	rom_addr_in => mcu_rom_addr,
 	rom_data_in => mcu_rom_data
@@ -982,7 +1109,7 @@ port map(
 	chip_sel    => n06_chipsel(2),
 	wr_en       => n06_chip_wr(2),
 	wr_data     => n06_chip_dout,
-	discrete_p  => open,
+	discrete_p  => n52_p_w,      -- VOICE52-2026-08-11: was `open` (voice was silent)
 	sample_addr => sample52_addr,
 	sample_data => sample52_data,
 	rom_wr      => mcu_rom_wr,
