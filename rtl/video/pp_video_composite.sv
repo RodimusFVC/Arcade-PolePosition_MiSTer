@@ -26,6 +26,7 @@ module pp_video_composite
     input  wire [8:0]  hpos,
     input  wire [8:0]  vpos,
     input  wire        chacl,        // LS259 q7: alpha color+msb enable (0 at reset)
+    input  wire        diag_swatch,  // DIAG-REVERT-2026-08-16: palette swatch overlay (OSD O7)
 
     // ---- ALPHA ----
     output wire [10:0] alpha_scan_addr,  input wire [15:0] alpha_scan_dout,
@@ -117,9 +118,33 @@ module pp_video_composite
             .prom_wr(prom_wr), .prom_addr(prom_addr), .prom_data(prom_data),
             .sprite_pen(s_pen), .sprite_color(s_color), .sprite_bank(s_bank),
             .sprite_active(s_active));
+    // ---- DIAG-REVERT-2026-08-16: PALETTE SWATCH OVERLAY --------------------
+    // 8 rows x 16 cols of 16x16px cells = indirect 0x00..0x7F, i.e. EVERY
+    // palette window in one screenshot:
+    //   row0 0x00-0x0F view/bg   | row1 0x10-0x1F **SPRITE bank0**
+    //   row2 0x20-0x2F alpha b0  | row3 0x30-0x3F (unused by any layer)
+    //   row4 0x40-0x4F road      | row5 0x50-0x5F **SPRITE bank1**
+    //   row6 0x60-0x6F alpha b1  | row7 0x70-0x7F (unused by any layer)
+    // Rows 4 and 2 are the KNOWN-GOOD reference (road + alpha render correctly
+    // on screen), so they calibrate the shot: if row4 looks like the road's
+    // palette but rows 1/5 look wrong, the fault is in the sprite windows.
+    // Cell 0 = LEFTMOST (swatch-overlay convention). diag_swatch=0 = pass-through.
+    // Cells are 8px wide x 16px tall => the whole grid is 128x128 px. It must
+    // fit BOTH windows: real HW active is hcnt 187..474, and the Verilator
+    // harness only presents hpos 256..511. X0=280 sits inside both. (First cut
+    // used 16px cells from X0=192 and lost 4 columns off the left in sim.)
+    localparam [8:0] SW_X0 = 9'd280;
+    localparam [8:0] SW_Y0 = 9'd56;
+    wire [8:0] sw_dx = hpos - SW_X0;
+    wire [8:0] sw_dy = vpos - SW_Y0;
+    wire       sw_on = diag_swatch && (hpos >= SW_X0) && (sw_dx < 9'd128)
+                                   && (vpos >= SW_Y0) && (sw_dy < 9'd128);
+    wire [7:0] sw_indirect = {1'b0, sw_dy[6:4], sw_dx[6:3]};   // {row,col}
+
     wire [7:0] sr, sg, sb; wire s_transp_unused;
     pp_palette_sprite u_pal_s (.clk(clk), .prom_wr(prom_wr), .prom_addr(prom_addr),
             .prom_data(prom_data), .color(s_color), .pen(s_pen), .bank128v(s_bank),
+            .diag_en(sw_on), .diag_indirect(sw_indirect),          // DIAG
             .r(sr), .g(sg), .b(sb), .transparent(s_transp_unused));
 
     // ======================= COMPOSITE =====================================
@@ -127,12 +152,21 @@ module pp_video_composite
     wire [7:0]  base_r = view_region ? vr : rr;
     wire [7:0]  base_g = view_region ? vg : rg;
     wire [7:0]  base_b = view_region ? vb : rb;
-    wire [7:0]  mid_r  = s_active ? sr : base_r;   // sprite over view/road
-    wire [7:0]  mid_g  = s_active ? sg : base_g;
-    wire [7:0]  mid_b  = s_active ? sb : base_b;
-    wire [7:0]  fin_r  = a_transp ? mid_r : ar;    // alpha on top
-    wire [7:0]  fin_g  = a_transp ? mid_g : ag;
-    wire [7:0]  fin_b  = a_transp ? mid_b : ab;
+    // DIAG-REVERT-2026-08-16: originals below, uncomment to restore
+    // wire [7:0]  mid_r  = s_active ? sr : base_r;   // sprite over view/road
+    // wire [7:0]  mid_g  = s_active ? sg : base_g;
+    // wire [7:0]  mid_b  = s_active ? sb : base_b;
+    // wire [7:0]  fin_r  = a_transp ? mid_r : ar;    // alpha on top
+    // wire [7:0]  fin_g  = a_transp ? mid_g : ag;
+    // wire [7:0]  fin_b  = a_transp ? mid_b : ab;
+    // DIAG: sw_on forces the sprite palette output to win, and holds the alpha
+    // layer off, so the swatch reads clean with no HUD text over it.
+    wire [7:0]  mid_r  = (s_active | sw_on) ? sr : base_r;
+    wire [7:0]  mid_g  = (s_active | sw_on) ? sg : base_g;
+    wire [7:0]  mid_b  = (s_active | sw_on) ? sb : base_b;
+    wire [7:0]  fin_r  = (a_transp | sw_on) ? mid_r : ar;
+    wire [7:0]  fin_g  = (a_transp | sw_on) ? mid_g : ag;
+    wire [7:0]  fin_b  = (a_transp | sw_on) ? mid_b : ab;
 
     assign r = fin_r[7:4];
     assign g = fin_g[7:4];

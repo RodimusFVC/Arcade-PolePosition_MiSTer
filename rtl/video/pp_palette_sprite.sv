@@ -34,6 +34,16 @@ module pp_palette_sprite
     input  wire [3:0]  pen,         // 4bpp pixel value
     input  wire        bank128v,    // sprite 0x40 bit (sy>=128)
 
+    // ---- DIAG-REVERT-2026-08-16: palette-swatch readout --------------------
+    // Forces the `indirect` index so one screenshot reads the RGB PROM
+    // straight out through THIS module's real hardware (its own PROM copy,
+    // the real DAC). Purpose: road (0x40-0x4F) and alpha (0x20-0x2F/0x60-0x6F)
+    // are known good on screen, but NOTHING that works reads the sprite
+    // windows 0x10-0x1F / 0x50-0x5F -- so they have never been observed.
+    // diag_en=0 is pure pass-through: zero effect on normal rendering.
+    input  wire        diag_en,
+    input  wire [7:0]  diag_indirect,
+
     // ---- result (2-clk latency) --------------------------------------------
     output wire [7:0]  r,
     output wire [7:0]  g,
@@ -69,7 +79,10 @@ module pp_palette_sprite
     wire s1_transp = (promval == 4'hF);
 
     // ---- stage 2: indirect index -> R/G/B nibble lookup --------------------
-    wire [7:0] indirect = s1_bank ? (8'h50 + {4'h0, promval}) : (8'h10 + {4'h0, promval});
+    // DIAG-REVERT-2026-08-16: original below, uncomment to restore
+    // wire [7:0] indirect = s1_bank ? (8'h50 + {4'h0, promval}) : (8'h10 + {4'h0, promval});
+    wire [7:0] indirect_norm = s1_bank ? (8'h50 + {4'h0, promval}) : (8'h10 + {4'h0, promval});
+    wire [7:0] indirect      = diag_en ? diag_indirect : indirect_norm;   // DIAG
     reg  [3:0] r_nib, g_nib, b_nib;
     reg        s2_transp;
     always @(posedge clk) begin

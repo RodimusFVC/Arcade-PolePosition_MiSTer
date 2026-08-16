@@ -67,7 +67,16 @@ module pp_sprite_gen
                      S_FHI=10, S_PIX=11, S_DONE=12,
     // SCAN-LATENCY-FIX-2026-08-06: S_A4 absorbs the 1-clock scan_sprite read latency
     // (the attribute captures below each shifted one state later).
-                     S_A4=14;
+                     S_A4=14,
+    // SPRLATENCY-FIX-2026-08-11: S_FLOW does for the sprGFX reads what S_A4 did
+    // for the attribute reads and G_RDB3 did for pp_road_gen's road ROM -- absorb
+    // the 1-clock registered-ROM latency. Before this, BOTH gfx bytes were wrong:
+    //   S_FHI captured rom[PREVIOUS hi addr] into byte_lo, and
+    //   S_PIX read rom[byte_lo_a] (the LOW byte) as its planes-2/3 HIGH byte.
+    // Same defect class as ROMLATENCY-FIX-2026-08-11, which was MEASURED on the
+    // road path (497/498 chunks wrong). ⚠️ This sprite instance is fixed by
+    // construction, NOT measured -- see the note in Claude/.
+                     S_FLOW=15;
     reg [3:0]  st;
     reg [8:0]  ygen, ygen_prev;
     reg        gbank;
@@ -113,7 +122,19 @@ module pp_sprite_gen
     wire p1b = byte_lo    [3'd3 - {1'b0, cq}];
     wire p2b = sprgfx_data[3'd7 - {1'b0, cq}];
     wire p3b = sprgfx_data[3'd3 - {1'b0, cq}];
-    wire [3:0] pen = {p3b, p2b, p1b, p0b};
+    // DIAG-REVERT-2026-08-16: original below, uncomment to restore
+    // wire [3:0] pen = {p3b, p2b, p1b, p0b};
+    wire [3:0] pen = {p0b, p1b, p2b, p3b};   // DIAG: pen bit order REVERSED
+    // Tests "sprites are the right shape but the colours are swapped" =
+    // reversed pen bit order. Pens 0 and 15 are fixed points under reversal,
+    // so the transparent pen and the silhouette are unchanged while every
+    // other pen swaps in pairs (1<->8, 2<->4, 3<->12, 5<->10, 7<->14, 11<->13).
+    // ⚠️ NOT a confirmed fix. Counter-evidence, recorded so it isn't lost:
+    // pp_tile_decode.sv:88 (`pixel = {sel_byte[bit_p1], sel_byte[bit_p0]}`) is
+    // the WORKING alpha/view layer and uses plane0->LSB, the SAME convention
+    // this line originally had. If the HW result is "no change" or "worse",
+    // revert and go after the OTHER orderings instead: the x-within-nibble
+    // direction and which half-byte carries which plane pair.
     wire pen_transp = (sprite_prom[{color, pen}] == 4'hF);
 
     // ---- DDA next-siz (MAME: siz+=1+sizex; if(siz&0x40){siz&=0x3f; xx++}) ---
@@ -168,8 +189,16 @@ module pp_sprite_gen
             xcnt <= big ? 7'h40 : 7'h20;
             st   <= S_FLO;
         end
-        S_FLO: begin sprgfx_addr <= byte_lo_a;                   st <= S_FHI; end
-        S_FHI: begin byte_lo <= sprgfx_data; sprgfx_addr <= byte_lo_a + hi_off; st <= S_PIX; end
+        // SPRLATENCY-FIX-2026-08-11: each address is now issued one state before
+        // its data is consumed. Was:
+        //   S_FLO: sprgfx_addr <= byte_lo_a;                            -> S_FHI
+        //   S_FHI: byte_lo <= sprgfx_data; sprgfx_addr <= byte_lo_a+hi_off; -> S_PIX
+        // which captured one fetch early on both bytes.
+        //   S_FLO  issues LOW addr   | S_FLOW issues HIGH addr
+        //   S_FHI  captures LOW byte (valid now) | S_PIX sees HIGH byte live
+        S_FLO:  begin sprgfx_addr <= byte_lo_a;             st <= S_FLOW; end
+        S_FLOW: begin sprgfx_addr <= byte_lo_a + hi_off;    st <= S_FHI;  end
+        S_FHI:  begin byte_lo    <= sprgfx_data;            st <= S_PIX;  end
         S_PIX: begin
             if (xx < 10'h100 && !pen_transp)
                 linebuf[{gbank, xx[7:0]}] <= {1'b1, bank, color, pen};

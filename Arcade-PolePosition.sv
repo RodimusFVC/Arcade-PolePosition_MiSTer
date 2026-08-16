@@ -237,6 +237,10 @@ localparam CONF_STR = {
 	"-;",
 	"O2,Watchdog,On,Off;",
 	"O6,Service Mode,Off,On;",
+	// DIAG-REVERT-2026-08-16: palette-swatch readout. 8x16 grid of RGB-PROM
+	// indirect 0x00-0x7F. Rows 1/5 are the sprite windows (0x10/0x50) that no
+	// working layer ever reads; rows 2/4 (alpha/road) are the known-good ref.
+	"O7,Palette Swatch,Off,On;",
 	"R0,Reset;",
 	// 2026-08-05: 8-slot list, names + physical order copied from the MRA
 	// <buttons> element so core and MRA agree (they did not: CONF_STR had 6
@@ -720,6 +724,7 @@ poleposition poleposition
 	.flip(flip_screen),
 	.h_offset(status[27:24]),
 	.v_offset(status[31:28]),
+	.diag_swatch(status[7]),          // DIAG-REVERT-2026-08-16
 
 	.audio(audio),
 

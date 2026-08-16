@@ -106,6 +106,8 @@ port(
  flip           : in std_logic;
  h_offset	: in signed(3 downto 0);
  v_offset	: in signed(3 downto 0);
+ -- DIAG-REVERT-2026-08-16: palette-swatch overlay enable (OSD O7). 0 = normal.
+ diag_swatch    : in std_logic;
  -- XEVIOUS-STRIP-2026-08-06: `test_v : in std_logic_vector(3 downto 0)` removed.
  -- It was declared here, referenced nowhere in the architecture, and left
  -- unconnected at the instantiation -- an undriven input on every build.
@@ -470,6 +472,7 @@ architecture struct of poleposition is
    hpos            : in  std_logic_vector(8 downto 0);
    vpos            : in  std_logic_vector(8 downto 0);
    chacl           : in  std_logic;
+   diag_swatch     : in  std_logic;   -- DIAG-REVERT-2026-08-16: palette swatch overlay
    alpha_scan_addr : out std_logic_vector(10 downto 0);
    alpha_scan_dout : in  std_logic_vector(15 downto 0);
    alpha_gfx_addr  : out std_logic_vector(11 downto 0);
@@ -735,6 +738,7 @@ port map(
 	hpos             => hcnt,
 	vpos             => vcnt,
 	chacl            => chacl_w,
+	diag_swatch      => diag_swatch,   -- DIAG-REVERT-2026-08-16
 	alpha_scan_addr  => bru_scan_addr,
 	alpha_scan_dout  => alpha_scan_dout,
 	alpha_gfx_addr   => gfx_addr,
