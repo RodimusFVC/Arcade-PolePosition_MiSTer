@@ -88,10 +88,15 @@ module pp_tile_composite
     );
 
     wire [7:0] vr, vg, vb;
-    // view palette filters its own tables (R/G/B/view) via prom_addr[10:8]
+    // view palette filters its own tables (R/G/B/view) via prom_addr[11:8]
+    // VIEWPROM-ALIAS-FIX-2026-08-16: pp_palette_view's prom_addr widened 11->12
+    // bits. THIS module (superseded by pp_video_composite, but still listed in
+    // files.qip) only has an 11-bit bus, so pad bit 11 with 0 -- it never
+    // carries the 0x800+ offsets that caused the aliasing. Keeps behaviour
+    // identical and avoids a port-width warning in the Quartus build.
     pp_palette_view u_pal_v (
         .clk(clk),
-        .prom_wr(prom_wr), .prom_addr(prom_addr), .prom_data(prom_data),
+        .prom_wr(prom_wr), .prom_addr({1'b0, prom_addr}), .prom_data(prom_data),
         .color(v_color), .pixel(v_pixel),
         .r(vr), .g(vg), .b(vb)
     );

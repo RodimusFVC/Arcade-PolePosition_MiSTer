@@ -34,7 +34,18 @@ module pp_palette_view
 
     // ---- PROM load (ioctl "proms" region) ----------------------------------
     input  wire        prom_wr,
-    input  wire [10:0] prom_addr,   // [10:8]=table (0=R,1=G,2=B,4=view), [7:0]=idx
+    // VIEWPROM-ALIAS-FIX-2026-08-16: was [10:0], decoded with prom_addr[10:8].
+    // The proms region is 0x1000 bytes, so bit 11 was DISCARDED and everything
+    // in the upper half aliased straight onto this module's own tables:
+    //   road colour  0x800/0x900/0xA00 -> 0x000/0x100/0x200 = red/green/blue_prom
+    //   sprite colour      0xC00       -> 0x400             = view_prom
+    // Both load AFTER the R/G/B PROMs, so all four view tables were overwritten
+    // -> sky rendered from road-PROM bytes with green/blue reading 0 (pure red).
+    // pp_palette_road/pp_palette_sprite always took the full 12 bits;
+    // pp_palette_alpha is gated (!prom_addr[10] && prom_addr[11:8]<=3). This
+    // module had neither, which is why the sky was the ONLY layer affected.
+    // input  wire [10:0] prom_addr,   // ORIGINAL
+    input  wire [11:0] prom_addr,   // [11:8]=table (0=R,1=G,2=B,4=view), [7:0]=idx
     input  wire [7:0]  prom_data,
 
     // ---- lookup request (from the view tile layer) -------------------------
@@ -54,11 +65,14 @@ module pp_palette_view
 
     always @(posedge clk) begin
         if (prom_wr) begin
-            case (prom_addr[10:8])
-                3'd0: red_prom  [prom_addr[7:0]] <= prom_data[3:0];
-                3'd1: green_prom[prom_addr[7:0]] <= prom_data[3:0];
-                3'd2: blue_prom [prom_addr[7:0]] <= prom_data[3:0];
-                3'd4: view_prom [prom_addr[7:0]] <= prom_data[3:0];
+            // VIEWPROM-ALIAS-FIX-2026-08-16: 4-bit table select, so 0x800+
+            // no longer aliases onto 0x000/0x100/0x200/0x400. Original was
+            // `case (prom_addr[10:8])` with 3'd0/1/2/4 arms.
+            case (prom_addr[11:8])
+                4'd0: red_prom  [prom_addr[7:0]] <= prom_data[3:0];
+                4'd1: green_prom[prom_addr[7:0]] <= prom_data[3:0];
+                4'd2: blue_prom [prom_addr[7:0]] <= prom_data[3:0];
+                4'd4: view_prom [prom_addr[7:0]] <= prom_data[3:0];
                 default: ;
             endcase
         end

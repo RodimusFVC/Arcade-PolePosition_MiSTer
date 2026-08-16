@@ -87,7 +87,9 @@ module pp_video_composite
             .gfx_addr(view_gfx_addr), .gfx_data(view_gfx_data),
             .color(v_color), .pixel(v_pixel), .bank128v(v_bunused));
     wire [7:0] vr, vg, vb;
-    pp_palette_view u_pal_v (.clk(clk), .prom_wr(prom_wr), .prom_addr(prom_addr[10:0]),
+    // VIEWPROM-ALIAS-FIX-2026-08-16: was .prom_addr(prom_addr[10:0]) -- dropping
+    // bit 11 aliased road(0x800)/sprite(0xC00) onto view's R/G/B/view tables.
+    pp_palette_view u_pal_v (.clk(clk), .prom_wr(prom_wr), .prom_addr(prom_addr),
             .prom_data(prom_data), .color(v_color), .pixel(v_pixel), .r(vr), .g(vg), .b(vb));
 
     // ======================= ROAD ==========================================
