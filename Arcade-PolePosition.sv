@@ -478,12 +478,46 @@ screen_rotate screen_rotate (.*);
 // parameter only sizes the scandoubler's line buffer, so the oversized value was
 // harmless — it just reserved a line buffer a tile-column wider than any line the
 // core can produce.
+// VIDSHIFT-2026-08-16: move the WHOLE picture one pixel RIGHT.
+// Measured on the square-grid test pattern: the right edge carried one column
+// too many, the left edge one too few.
+//
+// Same family as Common-Pitfalls/"Pixel pipeline needs matched sync delay"
+// (content vs sync latency mismatch), but the opposite correction: that note
+// fixes content arriving LATE by delaying the syncs. Here the content is one
+// pixel EARLY relative to the window, so the PIXELS get the stage instead.
+//
+// ⛔ Do NOT instead nudge gen_video.sv's hblank compare terms. That was tried
+// (40 -> 39 on BOTH compares) and BROKE OUTPUT ENTIRELY -- see the comment block
+// at gen_video.sv:176-183. This approach leaves core timing completely untouched:
+// hblank/vblank/hs/vs still go to arcade_video RAW, and the core's own logic
+// (watchdog, 51xx vblank tick, pause) is not touched at all.
+//
+// Delay the PIXELS, not the syncs. arcade_video starts capturing the line when
+// HBlank deasserts; if the RGB on the bus at that instant is the PREVIOUS pixel,
+// source pixel 0 lands in display column 1 -- the picture moves RIGHT, the left
+// edge gains a column and the right edge loses one. Delaying the SYNCS instead
+// opens the window later and moves the picture LEFT, i.e. the wrong way here.
+//
+// `rgb_out` comes from rtl/mister_custom/pause.v:98 (the dim-video helper); it is
+// tapped here rather than modified there, since that file is shared MiSTer glue.
+localparam [1:0] VID_H_DELAY = 2'd1;   // pixels to shift RIGHT; 0 = disabled
+reg [11:0] rgb_d1 = 12'd0, rgb_d2 = 12'd0, rgb_d3 = 12'd0;
+always @(posedge clk_sys) if (ce_pix) begin
+	rgb_d1 <= rgb_out;
+	rgb_d2 <= rgb_d1;
+	rgb_d3 <= rgb_d2;
+end
+wire [11:0] rgb_shifted = (VID_H_DELAY == 2'd0) ? rgb_out :
+                          (VID_H_DELAY == 2'd1) ? rgb_d1  :
+                          (VID_H_DELAY == 2'd2) ? rgb_d2  : rgb_d3;
+
 arcade_video #(256,12) arcade_video
 (
 	.*,
 
 	.clk_video(clk_48),
-	.RGB_in(rgb_out),
+	.RGB_in(rgb_shifted),   // VIDSHIFT-2026-08-16 (was rgb_out)
 	.HBlank(hblank),
 	.VBlank(vblank),
 	.HSync(hs),
