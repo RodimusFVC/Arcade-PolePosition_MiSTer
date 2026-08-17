@@ -85,7 +85,19 @@ module pp_tile_decode
     wire [1:0] x_in_half = col[1:0];
     wire [2:0] bit_p0 = {1'b1, ~x_in_half};   // plane0 -> bits 7,6,5,4 as x=0,1,2,3
     wire [2:0] bit_p1 = {1'b0, ~x_in_half};   // plane1 -> bits 3,2,1,0 as x=0,1,2,3
-    assign pixel = { sel_byte[bit_p1], sel_byte[bit_p0] };
+    // TILEPEN-ORDER-FIX-2026-08-16: plane0 is the MSB, not the LSB.
+    // Same fault as PENORDER-FIX-2026-08-16 in pp_sprite_gen.sv, which was
+    // HW-CONFIRMED today: MAME's decode gives plane 0 the HIGH pen bit
+    // (planebit = 1 << (planes-1-plane)). This line had the 2bpp equivalent
+    // backwards. For 2bpp, reversal swaps pen1<->pen2 and leaves pen0/pen3
+    // fixed, so silhouettes and backgrounds look fine while DETAIL and FILL
+    // trade colours -- the mountains' light angled dashes rendered as a brown
+    // smear on teal instead of light dashes on brown (user, 2026-08-16).
+    // ⚠️ This also feeds the ALPHA layer. Text that uses only pen0/pen3 is
+    // unaffected (both are fixed points); if any HUD text changes colour,
+    // that is this change and it needs re-checking, not the view layer.
+    // assign pixel = { sel_byte[bit_p1], sel_byte[bit_p0] };   // ORIGINAL
+    assign pixel = { sel_byte[bit_p0], sel_byte[bit_p1] };
 
 endmodule
 

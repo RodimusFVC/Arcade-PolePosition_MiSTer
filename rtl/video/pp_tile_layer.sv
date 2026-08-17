@@ -73,7 +73,19 @@ module pp_tile_layer #(
     localparam integer RW = $clog2(ROWS);   // row index bits (alpha 5, view 4)
 
     // ---- effective X (scrolled for view) + prefetch position ----------------
-    wire [8:0] x_disp  = USE_HSCROLL ? (hpos + hscroll[8:0]) : hpos;
+    // VIEWCOL-OFFSET-FIX-2026-08-16: use SCREEN-relative x, not the raw counter.
+    // gen_video.sv:78-79 counts hcnt 128..511 and the ACTIVE region is 256..511,
+    // so raw `hpos` is 256 too high during active video.
+    //   alpha (COLS=32): fcol = x_disp[7:3] DISCARDS bit 8, so 256..511 masked to
+    //     columns 0..31 -- accidentally correct, which is why it always looked fine.
+    //   view  (COLS=64): fcol = x_disp[8:3] KEEPS bit 8, so screen x=0 fetched map
+    //     column 32 -> we rendered the WRONG HALF of the 64-column strip.
+    // Subtracting 256 with natural 9-bit wrap also keeps the one-tile PREFETCH
+    // correct across the blank->active boundary (hpos 248 -> 504, +8 -> 0).
+    // Alpha is bit-identical before and after; only the 64-column view changes.
+    // wire [8:0] x_disp  = USE_HSCROLL ? (hpos + hscroll[8:0]) : hpos;   // ORIGINAL
+    wire [8:0] sx      = hpos - 9'd256;
+    wire [8:0] x_disp  = USE_HSCROLL ? (sx + hscroll[8:0]) : sx;
     wire [8:0] x_fetch = x_disp + 9'd8;             // tile prefetched this span
     wire [2:0] p       = x_disp[2:0];               // intra-tile phase 0..7
 
