@@ -55,12 +55,11 @@
 //  output is left unconnected. Flagged for follow-up if a sub ROM is found
 //  to do a byte-wide (ADDB/INCB) access into VRAM.
 //
-//  #deviation: NVI level-hold — nvi_latch_subN is (re)armed only at each
-//  sub_nvi_trig pulse (from that CPU's nvi_enable at that instant) and held
-//  for the whole inter-trigger period; relies on z8002.sv's documented
-//  internal "nvi_pending level-latched from nvi_n, cleared on NVI accept"
-//  behavior to accept it exactly once. No external accept/ack signal exists
-//  to clear it early (z8002.sv exposes no such port).
+//  NVI: nvi_latch_subN is armed at each sub_nvi_trig pulse (from that CPU's
+//  nvi_enable at that instant) and cleared when that CPU writes 0 to 0x6000,
+//  per polepos.cpp:319. That write is the only ack the hardware has -- z8002.sv
+//  re-latches nvi_pending from the nvi_n LEVEL every clock, so a line left
+//  asserted is re-accepted on the next IRET, not "accepted exactly once".
 //
 //  0x6000/0xC000/0xC100 mirror-mask decodes derived from the given MAME
 //  AM_MIRROR masks (0x1FFE, 0x38FE): significant-bit mask = ~mirror_mask.
@@ -560,17 +559,28 @@ module PolePosition_subcpu
     assign vscroll = vscroll_r;
 
     //------------------------------------------------------------------------
-    //  NVI level-hold: (re)armed at each sub_nvi_trig pulse, gated by that
-    //  CPU's nvi_enable at that instant; held until the next trigger.
+    //  NVI line: armed at each sub_nvi_trig pulse (gated by that CPU's
+    //  nvi_enable at that instant), and de-asserted when that CPU writes 0 to
+    //  its own nvi_enable -- polepos.cpp:319 set_input_line(NVI_LINE, CLEAR).
+    //  That write is the only interrupt acknowledge the hardware has: each sub's
+    //  whole game loop IS its NVI handler (pp_sub1.asm $0132 clears 0x6000 on
+    //  entry, $01CC sets it again just before the IRET at $01D2).
     //------------------------------------------------------------------------
+    // NVI-ACK-ON-DISABLE-2026-09-05: without the third branch in each block,
+    // nvi_n stayed low for the whole frame; z8002.sv re-latches nvi_pending from
+    // the LEVEL (z8002.sv:1250), so every IRET immediately re-entered the handler
+    // and each sub ran its per-frame work several times per frame.
+    // TO REVERT: delete the two marked branches below.
     reg nvi_latch_sub1, nvi_latch_sub2;
     always @(posedge clk) begin
-        if (reset | ~sub1_reset_n) nvi_latch_sub1 <= 1'b0;
-        else if (sub_nvi_trig)     nvi_latch_sub1 <= nvi_en_sub1;
+        if (reset | ~sub1_reset_n)                           nvi_latch_sub1 <= 1'b0;
+        else if (sub_nvi_trig)                               nvi_latch_sub1 <= nvi_en_sub1;
+        else if (sub1_mem_we & sub1_nvi_hit & ~sub1_dout[0]) nvi_latch_sub1 <= 1'b0;   // NVI-ACK-ON-DISABLE-2026-09-05
     end
     always @(posedge clk) begin
-        if (reset | ~sub2_reset_n) nvi_latch_sub2 <= 1'b0;
-        else if (sub_nvi_trig)     nvi_latch_sub2 <= nvi_en_sub2;
+        if (reset | ~sub2_reset_n)                           nvi_latch_sub2 <= 1'b0;
+        else if (sub_nvi_trig)                               nvi_latch_sub2 <= nvi_en_sub2;
+        else if (sub2_mem_we & sub2_nvi_hit & ~sub2_dout[0]) nvi_latch_sub2 <= 1'b0;   // NVI-ACK-ON-DISABLE-2026-09-05
     end
     assign sub1_nvi_n = ~nvi_latch_sub1;
     assign sub2_nvi_n = ~nvi_latch_sub2;
