@@ -269,7 +269,8 @@ module z8002
     `include "z8002_cycle_lookup.svh"
     reg [15:0] pc, fcw, ir, operand, ea;
     reg [15:0] psap;           // PSA pointer (control reg, LDCTL psapoff) - reset 0
-    reg        nvi_pending;    // level-latched from nvi_n, cleared on NVI accept
+    reg        nvi_pending;    // set on nvi_n ASSERT edge, cleared on NVI accept
+    reg        nvi_n_d;        // NVIEDGE-2026-09-05: previous nvi_n, for edge detect
     // BATCH 17 2026-08-09: real internal-trap infrastructure (EPU/privileged-instruction
     // trap/system-call), modeled EXACTLY on the already-verified NVI accept sequence
     // (S_NVI_PC/FCW/VEC/RDFCW/RDPC) -- push PC, push OLD fcw, push the trapping opcode
@@ -1168,7 +1169,21 @@ module z8002
     reg [10:0] dab_idx;           // BATCH 8: DAB rom index {DA,H,C,byte}
     reg [8:0]  dab_res;           // BATCH 8: DAB rom result {carry,byte}
     reg [4:0]  cnt;
-    reg [3:0]  incn;
+    // ================= INCDEC16-2026-09-05 =================================
+    // Was [3:0], so imm4m1 field 0xF ("+16") wrapped to 0 and INC/DEC rd,#16
+    // added nothing. Suite: ZA8/A9/AA/AB_dddd_imm4m1, 128 fails each -> 0.
+    // NOT visually confirmed on hardware; suite evidence only.
+    //
+    // TO RIP OUT: restore the declaration below AND the four zero-extends that
+    // were narrowed with it (they are width-matched to this reg, so all five
+    // must move together or Verilator/Quartus will width-warn):
+    //   reg [3:0]  incn;
+    //   0xAB DEC : incn=din[3:0]+4'd1; ... res16=a16-{12'd0,incn};
+    //   0xAA DECB: incn=din[3:0]+4'd1; ... add8={1'b0,dbyte}-{5'd0,incn};
+    //   0xA9 INC : incn=din[3:0]+4'd1; incw_sum={1'b0,R[din[7:4]]}+{13'd0,incn};
+    //   0xA8 INCB: incn=din[3:0]+4'd1; ... incb_sum={1'b0,dbyte}+{5'd0,incn};
+    // =======================================================================
+    reg [4:0]  incn;
     reg        z,s,v,c,h,wb, cbit;
     // BATCH 2 combinational scratch
     reg [7:0]  res8;             // byte-ALU result
@@ -1230,7 +1245,7 @@ module z8002
         if (!reset_n) begin
             pc<=0; fcw<=0; ir<=0; dst<=0; src<=0; aluop<=0; operand<=0;
             ea<=0; daop<=0; retire<=0; illegal<=0; state<=S_RST_FCW;
-            psap<=16'h0000; nvi_pending<=1'b0; mcnt<=4'h0; l32wb<=1'b0;
+            psap<=16'h0000; nvi_pending<=1'b0; nvi_n_d<=1'b1; mcnt<=4'h0; l32wb<=1'b0;
             operand2<=16'h0000; bmask<=16'h0000; bitop_set<=1'b0;
             idxr<=4'h0;
             target_cycles<=16'd0; cyc_count<=16'd1; // BATCH 9: cyc_count>=target_cycles so
@@ -1245,9 +1260,27 @@ module z8002
             cyc_count <= cyc_count + 16'd1;
             pc2 = pc + 16'd2;
             // level-triggered NVI latch (MAME execute_input_edge_triggered==false for NVI):
-            // set while the line is held low; cleared exactly on accept (S_NVI_RDPC) unless
-            // still held low that same cycle, in which case it correctly re-latches.
-            if (!nvi_n) nvi_pending <= 1'b1;
+            // ================= NVIEDGE-2026-09-05 ==============================
+            // Was `if (!nvi_n) nvi_pending <= 1'b1;` -- level-sampled every ce, so
+            // the accept's clear was undone on the very next ce while the line was
+            // still low, and each IRET re-entered the handler. MEASURED: exactly
+            // 2.000 handler entries/frame on both subs (correct = 1.000).
+            //
+            // MAME sets the request ONLY in execute_set_input(), which the scheduler
+            // calls on line TRANSITIONS -- z8000.cpp: ASSERT does `m_irq_req |=
+            // Z8000_NVI`, accept does `m_irq_req &= ~Z8000_NVI`, and nothing re-sets
+            // it while the line stays asserted. So it is one-shot per assertion.
+            //
+            // PAIRED WITH PolePosition_subcpu.sv NVI-ACK-ON-DISABLE-2026-09-05: that
+            // fix de-asserts nvi_n on the sub's 0x6000 write, which is what produces
+            // the rising edge that arms the next frame. Reverting that one WITHOUT
+            // reverting this leaves nvi_n low forever -> no further assert edge ->
+            // the subs take one NVI and never run again. Move the two together.
+            //
+            // TO RIP OUT: restore `if (!nvi_n) nvi_pending <= 1'b1;` and drop nvi_n_d.
+            // ==================================================================
+            nvi_n_d <= nvi_n;
+            if (!nvi_n && nvi_n_d) nvi_pending <= 1'b1;
             // writeback-bus defaults: no channel writes unless a state arm claims one
             rwb0_we=1'b0; rwb0_idx=4'd0; rwb0_val=16'h0000; rwb0_be=2'b11;
             rwb1_we=1'b0; rwb1_idx=4'd0; rwb1_val=16'h0000; rwb1_be=2'b11;
@@ -1533,7 +1566,7 @@ module z8002
                 end
                 // ---- DEC rd,#n (0xAB, word, ZSV) ----
                 else if (din[15:8]==8'hAB) begin
-                    incn=din[3:0]+4'd1; a16=R[din[7:4]]; res16=a16-{12'd0,incn};
+                    incn=din[3:0]+5'd1; a16=R[din[7:4]]; res16=a16-{11'd0,incn};
                     v=a16[15] & ~res16[15];
                     rwb0_we=1'b1; rwb0_idx=din[7:4]; rwb0_val=res16;
                     fcw<=(fcw & ~(MZ|MS|MV)) | ((res16==0)?MZ:0)|(res16[15]?MS:0)|(v?MV:0);
@@ -1541,9 +1574,9 @@ module z8002
                 end
                 // ---- DECB rbd,#n (0xAA, byte, ZSV) ----
                 else if (din[15:8]==8'hAA) begin
-                    incn=din[3:0]+4'd1;
+                    incn=din[3:0]+5'd1;
                     dbyte = din[7] ? R[din[6:4]][7:0] : R[din[6:4]][15:8];
-                    add8 = {1'b0,dbyte} - {5'd0,incn};
+                    add8 = {1'b0,dbyte} - {4'd0,incn};
                     v = dbyte[7] & ~add8[7];
                     rwb0_we=1'b1; rwb0_idx={1'b0,din[6:4]}; rwb0_val={2{add8[7:0]}}; rwb0_be=din[7]?2'b01:2'b10;
                     fcw<=(fcw & ~(MZ|MS|MV)) | ((add8[7:0]==0)?MZ:0)|(add8[7]?MS:0)|(v?MV:0);
@@ -1551,7 +1584,7 @@ module z8002
                 end
                 // ---- INC rd,#n (0xA9, word, ZSV) ----
                 else if (din[15:8]==8'hA9) begin
-                    incn=din[3:0]+4'd1; incw_sum={1'b0,R[din[7:4]]}+{13'd0,incn};
+                    incn=din[3:0]+5'd1; incw_sum={1'b0,R[din[7:4]]}+{12'd0,incn};
                     v=(~R[din[7:4]][15]) & incw_sum[15];
                     rwb0_we=1'b1; rwb0_idx=din[7:4]; rwb0_val=incw_sum[15:0];
                     fcw<=(fcw & ~(MZ|MS|MV)) | ((incw_sum[15:0]==0)?MZ:0)
@@ -1560,9 +1593,9 @@ module z8002
                 end
                 // ---- INCB rbd,#n (0xA8, byte, ZSV) ----
                 else if (din[15:8]==8'hA8) begin
-                    incn=din[3:0]+4'd1;
+                    incn=din[3:0]+5'd1;
                     dbyte = din[7] ? R[din[6:4]][7:0] : R[din[6:4]][15:8];
-                    incb_sum={1'b0,dbyte}+{5'd0,incn};
+                    incb_sum={1'b0,dbyte}+{4'd0,incn};
                     v=(~dbyte[7]) & incb_sum[7];
                     rwb0_we=1'b1; rwb0_idx={1'b0,din[6:4]}; rwb0_val={2{incb_sum[7:0]}}; rwb0_be=din[7]?2'b01:2'b10;
                     fcw<=(fcw & ~(MZ|MS|MV)) | ((incb_sum[7:0]==0)?MZ:0)
@@ -1576,9 +1609,24 @@ module z8002
                         rwb0_we=1'b1; rwb0_idx=din[11:8]; rwb0_val=R[din[11:8]]-16'd1;
                         pc<=(R[din[11:8]]-16'd1!=0) ? (pc2-disp2) : pc2;
                     end else begin
+                        // ============ DBJNZ-BRANCH-2026-09-05 ==========================
+                        // Byte form fell through with pc<=pc2 and NEVER branched, so every
+                        // byte dbjnz loop ran exactly one iteration. MAME z8000ops.hxx
+                        // ZF_dddd_0dsp7: RB(dst)-=1; if (RB(dst)) set_pc(m_pc - 2*dsp7);
+                        // Same shape as the word form directly above. Suite: 16189 -> 0.
+                        // NOT visually confirmed on hardware; suite evidence only. The
+                        // horizon "pillar" this was expected to fix did not reproduce in
+                        // either build, so do NOT record this as the pillar fix.
+                        //
+                        // TO RIP OUT: delete the four lines below and restore:
+                        //   rwb0_we=1'b1; rwb0_idx={1'b0,din[10:8]}; rwb0_be=din[11]?2'b01:2'b10;
+                        //   rwb0_val={2{(din[11] ? R[din[10:8]][7:0] : R[din[10:8]][15:8]) - 8'd1}};
+                        //   pc<=pc2;
+                        // ===============================================================
+                        dbyte = (din[11] ? R[din[10:8]][7:0] : R[din[10:8]][15:8]) - 8'd1;
                         rwb0_we=1'b1; rwb0_idx={1'b0,din[10:8]}; rwb0_be=din[11]?2'b01:2'b10;
-                        rwb0_val={2{(din[11] ? R[din[10:8]][7:0] : R[din[10:8]][15:8]) - 8'd1}};
-                        pc<=pc2;
+                        rwb0_val={2{dbyte}};
+                        pc<=(dbyte!=8'd0) ? (pc2-disp2) : pc2;
                     end
                     retire<=1'b1;
                 end
