@@ -195,52 +195,38 @@ module namco_06xx
     // the real 06xx's data latch, so both are exposed rather than guessed --
     // and CTRL-REARM-FIX-2026-08-10 is the standing warning about shipping a
     // "more faithful" 06xx change without measuring it.
-    localparam HOLD_MODE = 1;
+    localparam HOLD_MODE = 0;   // HOLDMODE-0-2026-09-20 (was 1)
 
     wire win_close = enabled && base_ce && !pause && (div_cnt == div_limit) &&  timer_state;
     wire win_open  = enabled && base_ce && !pause && (div_cnt == div_limit) && ~timer_state;
 
-    // N06-HOLD-PERCHIP-2026-09-20 -------------------------------------------
-    // The single shared hold below was captured from data_r_val (the AND of the
-    // SELECTED chips) and never cleared on a ctrl write, so it carried one
-    // chip's byte into the next transfer of a DIFFERENT chip. Measured: the
-    // 53xx (ctrl=$72, 8 bytes -> $8104) left F0 in the hold; the very next
-    // transfer (ctrl=$71, 3 bytes -> $810C) returned it before its own first
-    // win_close. $810C is the BCD credit count ($01E7 -> $4007 -> sub1 %81AA),
-    // so a foreign non-zero byte there = a phantom credit = sub1 MODE=2 =
-    // stuck on PUSH START BUTTON forever.
+    // N06-DATAHOLD-2026-08-11 / HOLDMODE-0-2026-09-20 ----------------------
+    // HOLD_MODE was 1 (capture at select-window close). MEASURED 2026-09-20:
+    // that fixed instant can land BETWEEN the 51xx's two nibble outO's, so the
+    // Z80 latches a half-written byte. Intermediates F4 / 7F / 04 / F0 appeared
+    // in 13% of 51xx reads, and $810C is the BCD CREDIT COUNT
+    // ($01E7 -> $4007 -> sub1 %800E -> %81AA), so one non-zero sample = a
+    // phantom credit = sub1 MODE=2 = stuck on PUSH START BUTTON forever.
     //
-    // Fix: hold PER CHIP and only update the chips this transfer selects, so a
-    // read can never return another chip's data. Keeps the per-transfer hold
-    // that N06-DATAHOLD-2026-08-11 added (HW-confirmed: fixed self-moving
-    // controls); only removes the cross-chip leak.
+    // With HOLD_MODE=0 (free-running live read, which is what namco06.cpp
+    // data_r() does) the 51xx returns exactly 4 distinct values in equal thirds
+    // (74 / FF / {00,FB}) and the 53xx exactly 3 -- 0% differ from the live
+    // mailbox. Attract mode then runs. Per-chip hold registers were also tried
+    // and do NOT help: the tearing is within a single chip's own byte.
     //
-    // Original single-register form, kept for revert:
+    // Original below, restore with HOLD_MODE = 1:
     //   reg [7:0] data_r_hold;
     //   always @(posedge clk) begin
     //       if (reset)                                  data_r_hold <= 8'hFF;
     //       else if (HOLD_MODE == 1 ? win_close : win_open) data_r_hold <= data_r_val;
     //   end
-    //   wire [7:0] data_r_sel = (HOLD_MODE == 0) ? data_r_val : data_r_hold;
-    reg [7:0] hold0, hold1, hold2, hold3;
-    wire      hold_ce = (HOLD_MODE == 1) ? win_close : win_open;
+    reg [7:0] data_r_hold;
     always @(posedge clk) begin
-        if (reset) begin
-            hold0 <= 8'hFF; hold1 <= 8'hFF; hold2 <= 8'hFF; hold3 <= 8'hFF;
-        end else if (hold_ce) begin
-            if (ctrl[0]) hold0 <= chip0_din;
-            if (ctrl[1]) hold1 <= chip1_din;
-            if (ctrl[2]) hold2 <= chip2_din;
-            if (ctrl[3]) hold3 <= chip3_din;
-        end
+        if (reset)                                  data_r_hold <= 8'hFF;
+        else if (HOLD_MODE == 1 ? win_close : win_open) data_r_hold <= data_r_val;
     end
 
-    wire [7:0] h0 = ctrl[0] ? hold0 : 8'hFF;
-    wire [7:0] h1 = ctrl[1] ? hold1 : 8'hFF;
-    wire [7:0] h2 = ctrl[2] ? hold2 : 8'hFF;
-    wire [7:0] h3 = ctrl[3] ? hold3 : 8'hFF;
-
-    wire [7:0] data_r_sel = (HOLD_MODE == 0) ? data_r_val : (h0 & h1 & h2 & h3);
+    wire [7:0] data_r_sel = (HOLD_MODE == 0) ? data_r_val : data_r_hold;
 
     // N06-DATAHOLD-2026-08-11: original below, restore with HOLD_MODE = 0
     // assign cpu_din = ctrl_rd ? ctrl : (ctrl[4] ? data_r_val : 8'h00);
