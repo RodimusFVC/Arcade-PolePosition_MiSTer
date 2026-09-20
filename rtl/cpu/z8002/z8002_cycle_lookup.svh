@@ -24,8 +24,36 @@ function automatic [15:0] lookup_cycles(input [15:0] din);
     else if (din[15:8]==8'h61 && din[7:4]==4'h0) lookup_cycles = 16'd9;
     else if (din[15:8]==8'h6F && din[7:4]==4'h0) lookup_cycles = 16'd11;
     else if (din[15:8]==8'h0D && din[3:0]==4'h5 && din[7:4]!=4'h0) lookup_cycles = 16'd11;
-    else if (din[15:8]==8'h4D && din[7:4]==4'h0) lookup_cycles = (din[3:0]==4'h5) ? 16'd14 : 16'd11;
-    else if (din[15:8]==8'h4D && din[7:4]!=4'h0) lookup_cycles = (din[3:0]==4'h4) ? 16'd12 : 16'd15;
+    // ===================== CYCLE4D-2026-09-05 ==============================
+    // Was two 2-way splits that only captured din[3:0]==5 (direct) and ==4
+    // (indexed). Those were CORRECT for the opcodes dispatching when BATCH 9
+    // generated this table on 2026-07-28 -- 4D04/4D05/4D08 are still right.
+    // 4D00/01/02/06 were decoded LATER (4D01 on 2026-08-09, the silent-hang
+    // fix) and silently inherited the arm default, so the split went stale.
+    // MAME z8000tbl.hxx is uniform per low nibble, and the indexed form
+    // (din[7:4]!=0) is exactly the direct form +1. Measured against MAME via
+    // --dumpcycles: 49 wrong entries -> 0. These 49 were the ONLY wrong entries
+    // in the whole 65536 space; every other mismatch is an opcode with no table
+    // entry at all (deliberately unimplemented, falls through to the final =4).
+    // 4D01 is used 41x across pp_sub1/sub2.
+    //
+    // TO RIP OUT: delete this block and restore the two lines:
+    //   else if (din[15:8]==8'h4D && din[7:4]==4'h0) lookup_cycles = (din[3:0]==4'h5) ? 16'd14 : 16'd11;
+    //   else if (din[15:8]==8'h4D && din[7:4]!=4'h0) lookup_cycles = (din[3:0]==4'h4) ? 16'd12 : 16'd15;
+    // =======================================================================
+    else if (din[15:8]==8'h4D) begin
+        case (din[3:0])
+            4'h0:    lookup_cycles = (din[7:4]==4'h0) ? 16'd15 : 16'd16;
+            4'h1:    lookup_cycles = (din[7:4]==4'h0) ? 16'd14 : 16'd15;
+            4'h2:    lookup_cycles = (din[7:4]==4'h0) ? 16'd15 : 16'd16;
+            4'h4:    lookup_cycles = (din[7:4]==4'h0) ? 16'd11 : 16'd12;
+            4'h5:    lookup_cycles = (din[7:4]==4'h0) ? 16'd14 : 16'd15;
+            4'h6:    lookup_cycles = (din[7:4]==4'h0) ? 16'd14 : 16'd15;
+            4'h8:    lookup_cycles = (din[7:4]==4'h0) ? 16'd11 : 16'd12;
+            // never dispatched -- keep the prior arm defaults, unmeasured
+            default: lookup_cycles = (din[7:4]==4'h0) ? 16'd11 : 16'd15;
+        endcase
+    end
     else if (din[15:8]==8'hAB) lookup_cycles = 16'd4;
     else if (din[15:8]==8'hAA) lookup_cycles = 16'd4;
     else if (din[15:8]==8'hA9) lookup_cycles = 16'd4;

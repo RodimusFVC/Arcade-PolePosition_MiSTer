@@ -183,7 +183,12 @@ module mb88_core
           // BEFORE the instruction block so a coincident tsts (clears sf/SBcount) overrides. ----
           if (ce) begin
             if (serial_running) begin
-              if (serial_ps == 3'd5) begin
+              // SERIALRATE-2026-09-19: MAME SERIAL_PRESCALE=6 divides the MB88 PIN
+              // clock; `ce` is already pin/6 (MCU_CEN_DIV), so the /6 must not be
+              // applied twice. Serial shifts once per machine cycle.
+              // SERIALRATE-REVERT-2026-09-19: original below, uncomment to restore
+              // if (serial_ps == 3'd5) begin
+              if (serial_ps == 3'd0) begin
                 serial_ps <= 3'd0;
                 SBcount   <= SBcount + 11'd1;
                 if ((SBcount + 11'd1) >= SERIAL_THRESH) serial_disabled <= 1'b1;   // runaway guard
