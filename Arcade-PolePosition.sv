@@ -655,47 +655,45 @@ poleposition poleposition
 // HISCORE SYSTEM
 // --------------
 
-wire [11:0]hs_address;
+wire [10:0]hs_address;   // HISCORE-NVRAM-2026-09-20: was [11:0]; both ends are 11-bit (2 KB NVRAM)
 wire [7:0] hs_data_in;
 wire [7:0] hs_data_out;
 wire hs_write_enable;
 wire hs_pause;
 wire hs_configured;
 
-// DIAG-REVERT-2026-09-20: hiscore module DISABLED to remove it as a factor.
-// It could pause the CPU (hs_pause -> pause_cpu) and write into game RAM
-// (ram_write/ram_address, HS_ADDRESSWIDTH(11) = the 2 KB NVRAM window), either
-// of which can perturb the 06xx/51xx handshake timing. Original below --
-// uncomment this whole block and delete the tie-offs to restore.
-//
-// hiscore #(
-// 	.HS_ADDRESSWIDTH(11),
-// 	.CFG_ADDRESSWIDTH(2),		// 2 entries max (zaxxon/szaxxon)
-// 	.CFG_LENGTHWIDTH(2)
-// ) hi (
-// 	.*,
-// 	.clk(clk_sys),
-// 	.paused(pause_cpu),
-// 	.autosave(status[12]),
-// 	.ram_address(hs_address),
-// 	.data_from_ram(hs_data_out),
-// 	.data_to_ram(hs_data_in),
-// 	.data_from_hps(ioctl_dout),
-// 	.data_to_hps(ioctl_din),
-// 	.ram_write(hs_write_enable),
-// 	.ram_intent_read(),
-// 	.ram_intent_write(),
-// 	.pause_cpu(hs_pause),
-// 	.configured(hs_configured)
-// );
-
-// DIAG-2026-09-20: tie-offs standing in for the disabled hiscore instance.
-// ioctl_din was driven ONLY by it (consumed by hps_io), so it must be driven.
-assign ioctl_din       = 8'd0;
-assign hs_pause        = 1'b0;   // never request a CPU pause
-assign hs_configured   = 1'b0;   // hides the autosave OSD item via menumask
-assign hs_write_enable = 1'b0;   // never write game RAM
-assign hs_address      = 12'd0;
-assign hs_data_in      = 8'd0;
+// HISCORE — re-enabled 2026-09-20 once the NVRAM window was actually wired.
+// It had been running UNCONFIGURED (MRA had no ioctl index 3) AND its RAM port was
+// a stub (poleposition.vhd hardwired hs_data_out to 0), so it could never work.
+// Now: MRA index 3 carries @:maincpu,program,3000,7f2,b0,95 and hs_* reaches the
+// NVRAM's free port B. See [[Hiscore module causes progressive slowdown when unconfigured]].
+hiscore #(
+	.HS_ADDRESSWIDTH(11),          // 2 KB NVRAM, Z80 $3000-$37FF (2048 >= $7F2)
+	.HS_SCOREWIDTH(11),            // HISCORE-SCOREWIDTH-2026-09-20: capture buffer must
+	                               // hold the WHOLE range. Default 8 = 256 bytes, but our
+	                               // entry is $7F2 = 2034 bytes: buffer_addr (HS_SCOREWIDTH
+	                               // wide) wraps at 255 while compare_length counts to 2034,
+	                               // so hiscore.v:526 `buffer_addr == compare_length` NEVER
+	                               // matches and the extract never completes -> no save.
+	                               // Tutankham/Pacman omit this because their ranges are
+	                               // 45/66 bytes; ours is the first to exceed 256.
+	.CFG_ADDRESSWIDTH(2),          // 4 entries max; we use 1
+	.CFG_LENGTHWIDTH(2)            // 16-bit length ($7F2)
+) hi (
+	.*,
+	.clk(clk_sys),
+	.paused(pause_cpu),
+	.autosave(status[12]),
+	.ram_address(hs_address),
+	.data_from_ram(hs_data_out),
+	.data_to_ram(hs_data_in),
+	.data_from_hps(ioctl_dout),
+	.data_to_hps(ioctl_din),
+	.ram_write(hs_write_enable),
+	.ram_intent_read(),
+	.ram_intent_write(),
+	.pause_cpu(hs_pause),
+	.configured(hs_configured)
+);
 
 endmodule

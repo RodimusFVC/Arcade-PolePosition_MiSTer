@@ -556,7 +556,12 @@ architecture struct of poleposition is
    scan_view_addr   : in  std_logic_vector(10 downto 0);
    scan_view_dout   : out std_logic_vector(15 downto 0);
    hscroll          : out std_logic_vector(15 downto 0);
-   vscroll          : out std_logic_vector(15 downto 0)
+   vscroll          : out std_logic_vector(15 downto 0);
+   -- HISCORE-NVRAM-2026-09-20: hiscore window onto the NVRAM's free port B
+   hs_address       : in  std_logic_vector(10 downto 0);
+   hs_data_out      : out std_logic_vector(7 downto 0);
+   hs_data_in       : in  std_logic_vector(7 downto 0);
+   hs_write         : in  std_logic
  );
  end component;
 
@@ -613,7 +618,8 @@ zero11 <= (others => '0');
 
 blank_v      <= vblank;
 video_en     <= ena_vidgen;
-hs_data_out  <= (others => '0');
+-- HISCORE-NVRAM-2026-09-20: stub removed -- hs_data_out now comes from the NVRAM
+-- port B inside PolePosition_CPU. Original: hs_data_out <= (others => '0');
 
 cpu_ioctl_addr <= "00000000" & dn_addr;
 cpu_rom_wr     <= dn_wr when dn_addr(16 downto 12) < "00011" else '0';  -- maincpu region < 0x3000
@@ -824,7 +830,12 @@ port map(
 	scan_view_addr   => view_scan_addr_w,
 	scan_view_dout   => view_scan_dout_w,
 	hscroll          => hscroll_w,
-	vscroll          => road_vscroll_w
+	vscroll          => road_vscroll_w,
+	-- HISCORE-NVRAM-2026-09-20: pass the top-level hiscore port straight through
+	hs_address       => hs_address,
+	hs_data_out      => hs_data_out,
+	hs_data_in       => hs_data_in,
+	hs_write         => hs_write
 );
 
 -- watchdog (rtl/pp_watchdog.sv). vpos = vcnt, the SAME source fed to u_pp_cpu's

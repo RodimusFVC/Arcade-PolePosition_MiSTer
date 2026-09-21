@@ -108,7 +108,17 @@ module PolePosition_CPU
     input  wire [10:0] scan_view_addr,
     output wire [15:0] scan_view_dout,
     output wire [15:0] hscroll,       // view16_hscroll (z8002_map 0xC000)
-    output wire [15:0] vscroll        // road16_vscroll (z8002_map 0xC100)
+    output wire [15:0] vscroll,       // road16_vscroll (z8002_map 0xC100)
+
+    // ---- HISCORE-NVRAM-2026-09-20: hiscore access to the NVRAM's free port B --
+    // Scores live in the battery-backed NVRAM (Z80 0x3000-0x37FF). hiscore.dat:
+    //   @:maincpu,program,3000,7f2,b0,95
+    // 11-bit address == the 2 KB NVRAM == hiscore.v's HS_ADDRESSWIDTH(11), so
+    // hs_address indexes the NVRAM directly with no offset.
+    input  wire [10:0] hs_address,
+    output wire  [7:0] hs_data_out,   // NVRAM -> hiscore  (data_from_ram)
+    input  wire  [7:0] hs_data_in,    // hiscore -> NVRAM  (data_to_ram)
+    input  wire        hs_write
 );
 
     //------------------------------------------------------------------------
@@ -255,8 +265,14 @@ module PolePosition_CPU
         .wren_a   (cs_nvram & wr_s),
         .q_a      (nvram_D),
 
+        // HISCORE-NVRAM-2026-09-20: port B was unused (address_b tied to 0).
+        // It is now the hiscore module's read/write window into the NVRAM.
+        // Original: .address_b(11'd0)  with no data_b/wren_b/q_b.
         .clock_b  (clk),
-        .address_b(11'd0)
+        .address_b(hs_address),
+        .data_b   (hs_data_in),
+        .wren_b   (hs_write),
+        .q_b      (hs_data_out)
     );
 
     //------------------------------------------------------------------------
