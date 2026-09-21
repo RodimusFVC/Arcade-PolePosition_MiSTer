@@ -13,7 +13,7 @@
 
     <setname>poleposa2</setname>
     <parent>polepos</parent>
-    <mameversion>0270</mameversion>
+    <mameversion>0289</mameversion>
     <rbf>PolePosition</rbf>
     <about></about>
 
@@ -33,17 +33,21 @@
             <part crc="51018857" name="136014-102.4l" map="01"/>
             <part crc="8c2cf172" name="136014-101.3l" map="10"/>
         </interleave>
+        <part repeat="16384">00</part>
         <!-- sub2 (Z8002 #2) -->
         <interleave output="16">
             <part crc="c52c98ed" name="136014-204.4e" map="01"/>
             <part crc="eedea6e7" name="136014-203.3e" map="10"/>
         </interleave>
+        <part repeat="16384">00</part>
     </rom>
 
     <rom index="1" md5="none" zip="poleposa2.zip|polepos.zip">
         <!-- chars / tiles / sprites / bigsprites(GAP) / road / scalelut -->
         <part crc="a949aa85" name="136014-132.7n"/>
+        <part repeat="4096">00</part>
         <part crc="706e888a" name="136014-133.6n"/>
+        <part repeat="4096">00</part>
         <part crc="e7a09c93" name="136014-125.13n"/>
         <part crc="dee7d687" name="136014-126.12n"/>
         <part crc="2e134b46" name="136014-119.13j"/>
@@ -53,6 +57,7 @@
         <part crc="6f9997d2" name="136014-120.12j"/>
         <part crc="6c5c6e68" name="136014-122.12k"/>
         <part crc="111896ad" name="136014-124.12l"/>
+        <part repeat="8192">00</part>
         <part crc="ee6b3315" name="136014-127.2l"/>
         <part crc="6d1e7042" name="136014-128.2m"/>
         <part crc="4e97f101" name="136014-134.2n"/>
@@ -76,15 +81,15 @@
         <part crc="2401c817" name="136014-117.7l"/>
     </rom>
 
-    <!-- Index 3: hiscore config. @:maincpu,program,3000,7f2,b0,95
-         NVRAM $3000-$37F1 ($7F2 B). 16-byte header + one 8-byte entry:
-         byte0 pad | 1-3 addr | 4-5 len | 6 start | 7 end -->
+    <!-- Index 3: hiscore config -->
     <rom index="3" md5="none">
         <part>
         01 FF FF FF 00 FF 00 02 00 02 00 01 00 FF 00 00
         00 00 30 00 07 F2 B0 95
         </part>
     </rom>
+
+    <!-- Index 4: nvram config -->
     <rom index="4"></rom>
     <nvram index="4" size="2034"></nvram>
 
@@ -115,4 +120,7 @@
         <dip name="Speed Unit"    bits="9,9"   ids="mph,km/h"/>
         <dip name="Demo Sounds"   bits="8,8"   ids="On,Off"/>
     </switches>
+
+    <remark>Pole Position (Atari, version 2)</remark>
+    <mratimestamp>20260921000000</mratimestamp>
 </misterromdescription>

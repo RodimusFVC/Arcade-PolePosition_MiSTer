@@ -97,7 +97,7 @@ module PolePosition_CPU
 
     // ---- sub CPU subsystem (PolePosition_subcpu) -------------------------
     input  wire        ioctl_wr_idx0, // = ioctl_wr & (index==0), FULL range (sub ROM regions
-                                       //   0x3000-0x6FFF/0x7000-0xAFFF decoded inside the subsystem)
+                                       //   0x3000-0xAFFF/0xB000-0x12FFF decoded inside the subsystem)
     // video-pipeline scanout: 4 INDEPENDENT read ports (see PolePosition_subcpu)
     input  wire [10:0] scan_sprite_addr,
     output wire [15:0] scan_sprite_dout,

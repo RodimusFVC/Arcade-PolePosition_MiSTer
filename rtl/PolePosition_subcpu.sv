@@ -108,7 +108,7 @@ module PolePosition_subcpu
     output wire [15:0] hscroll,
     output wire [15:0] vscroll,
 
-    // ---- ROM ioctl load: index-0 stream, sub1@0x3000(0x4000) sub2@0x7000(0x4000)
+    // ---- ROM ioctl load: index-0 stream, sub1@0x3000(0x8000) sub2@0xB000(0x8000)
     //      pre-gated to index==0 by the caller (matches PolePosition_CPU.sv's
     //      rom_wr convention). Interleaved 16-bit big-endian: even dn_addr=HIGH.
     input  wire [24:0] dn_addr,
@@ -210,7 +210,7 @@ module PolePosition_subcpu
     localparam [15:0] VS_ADDR  = 16'hC100, VS_MASK  = 16'hC701;
 
     wire sub1_rom_sel  = ~sub1_addr[15];
-    wire [12:0] sub1_rom_idx = sub1_addr[13:1];
+    wire [13:0] sub1_rom_idx = sub1_addr[14:1];
     wire sub1_v_sprite = (sub1_addr[15:12] == 4'h8);
     wire sub1_v_road   = (sub1_addr[15:12] == 4'h9) & ~sub1_addr[11];
     wire sub1_v_alpha  = (sub1_addr[15:12] == 4'h9) &  sub1_addr[11];
@@ -222,7 +222,7 @@ module PolePosition_subcpu
     wire sub1_vs_hit   = ((sub1_addr & VS_MASK)  == VS_ADDR);
 
     wire sub2_rom_sel  = ~sub2_addr[15];
-    wire [12:0] sub2_rom_idx = sub2_addr[13:1];
+    wire [13:0] sub2_rom_idx = sub2_addr[14:1];
     wire sub2_v_sprite = (sub2_addr[15:12] == 4'h8);
     wire sub2_v_road   = (sub2_addr[15:12] == 4'h9) & ~sub2_addr[11];
     wire sub2_v_alpha  = (sub2_addr[15:12] == 4'h9) &  sub2_addr[11];
@@ -289,27 +289,30 @@ module PolePosition_subcpu
     wire own_sub2 = (div >= 4'd10);
 
     //------------------------------------------------------------------------
-    //  Sub program ROMs — 8K words each, hi/lo byte-split SIMPLE-dual-port
-    //  BRAM: write port = index-0 ioctl byte stream (sub1@0x3000/sub2@0x7000,
+    //  Sub program ROMs — 16K words each, hi/lo byte-split SIMPLE-dual-port
+    //  BRAM: write port = index-0 ioctl byte stream (sub1@0x3000/sub2@0xB000,
     //  even dn_addr=HIGH byte, big-endian); read port = the owning z8002
     //  (REGISTERED). Dedicated per sub (rom1<->sub1, rom2<->sub2), so no slot
     //  mux is needed — the read is valid at the sub's CE (addr stable the whole
     //  window). SDP template: `if(we) mem[waddr]<=wd; q<=mem[raddr];`.
     //------------------------------------------------------------------------
-    reg [7:0] rom1_hi [0:8191];
-    reg [7:0] rom1_lo [0:8191];
-    reg [7:0] rom2_hi [0:8191];
-    reg [7:0] rom2_lo [0:8191];
+    reg [7:0] rom1_hi [0:16383];
+    reg [7:0] rom1_lo [0:16383];
+    reg [7:0] rom2_hi [0:16383];
+    reg [7:0] rom2_lo [0:16383];
 
-    localparam [24:0] SUB1_BASE = 25'h3000, SUB1_LAST = 25'h6FFF;
-    localparam [24:0] SUB2_BASE = 25'h7000, SUB2_LAST = 25'hAFFF;
+    // PP2-EXPAND-2026-09-21: both windows are now MAME's declared 0x8000 sub
+    // region (PP1 fills 0x4000 and the MRA zero-pads the rest). Must match the
+    // SUB_WINDOW pad in verilator/survey/mra_emit.py and the sim loaders.
+    localparam [24:0] SUB1_BASE = 25'h3000,  SUB1_LAST = 25'h0AFFF;
+    localparam [24:0] SUB2_BASE = 25'h0B000, SUB2_LAST = 25'h12FFF;
 
     wire sub1_ld_hit = dn_wr & (dn_addr >= SUB1_BASE) & (dn_addr <= SUB1_LAST);
     wire sub2_ld_hit = dn_wr & (dn_addr >= SUB2_BASE) & (dn_addr <= SUB2_LAST);
     wire [24:0] sub1_ld_rel = dn_addr - SUB1_BASE;
     wire [24:0] sub2_ld_rel = dn_addr - SUB2_BASE;
-    wire [12:0] sub1_ld_idx = sub1_ld_rel[13:1];
-    wire [12:0] sub2_ld_idx = sub2_ld_rel[13:1];
+    wire [13:0] sub1_ld_idx = sub1_ld_rel[14:1];
+    wire [13:0] sub2_ld_idx = sub2_ld_rel[14:1];
     wire        sub1_ld_hi  = ~sub1_ld_rel[0];
     wire        sub2_ld_hi  = ~sub2_ld_rel[0];
 

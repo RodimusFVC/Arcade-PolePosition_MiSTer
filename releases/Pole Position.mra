@@ -13,7 +13,7 @@
 
     <setname>polepos</setname>
     <parent>polepos</parent>
-    <mameversion>0270</mameversion>
+    <mameversion>0289</mameversion>
     <rbf>PolePosition</rbf>
     <about></about>
 
@@ -32,16 +32,20 @@
             <part crc="fafb9049" name="pp3_2.8l" map="01"/>
             <part crc="65c1c2c2" name="pp3_1.8m" map="10"/>
         </interleave>
+        <part repeat="16384">00</part>
         <interleave output="16">
             <part crc="acc1ebc3" name="pp3_6.4l" map="01"/>
             <part crc="46e5c99a" name="pp3_5.4m" map="10"/>
         </interleave>
+        <part repeat="16384">00</part>
     </rom>
 
     <!-- Index 1: graphics -->
     <rom index="1" md5="none" zip="polepos.zip">
         <part crc="2e77187e" name="pp3_28.1f"/>
+        <part repeat="4096">00</part>
         <part crc="706e888a" name="pp1_29.1e"/>
+        <part repeat="4096">00</part>
         <part crc="b52c086b" name="pp3_25.1n"/>
         <part crc="d24a5707" name="pp3_26.1m"/>
         <part crc="2e134b46" name="pp1_17.5n"/>
@@ -51,6 +55,7 @@
         <part crc="6f9997d2" name="pp1_18.5m"/>
         <part crc="ec18075b" name="pp1_20.4m"/>
         <part crc="1d2f30b1" name="pp1_22.3m"/>
+        <part repeat="8192">00</part>
         <part crc="ee6b3315" name="pp1_30.3a"/>
         <part crc="6d1e7042" name="pp1_31.2a"/>
         <part crc="4e97f101" name="pp1_32.1a"/>
@@ -75,18 +80,15 @@
         <part crc="2401c817" name="pp1-4.9h"/>    <!-- user1 sync chain   0x100 -->
     </rom>
 
-    <!-- Index 3: hiscore config (hiscore.dat @:maincpu,program,3000,7f2,b0,95)
-         The scores live in the battery-backed NVRAM, Z80 $3000-$37F1 ($7F2 bytes).
-         16-byte header, then one 8-byte entry:
-           byte0 pad | bytes1-3 addr $003000 | bytes4-5 len $07F2 | b0 start | 95 end
-         The $4080 entry from hiscore.dat is only a readiness guard (start==end),
-         carries no score data, and is omitted so the range stays inside 11 bits. -->
+    <!-- Index 3: hiscore config -->
     <rom index="3" md5="none">
         <part>
 		01 FF FF FF 00 FF 00 02 00 02 00 01 00 FF 00 00
         00 00 30 00 07 F2 B0 95
         </part>
     </rom>
+
+    <!-- Index 4: nvram config -->  
     <rom index="4"></rom>
 	<nvram index="4" size="2034"></nvram>
 
@@ -118,7 +120,6 @@
         <dip name="Speed Unit"    bits="9,9"   ids="mph,km/h"/>
         <dip name="Demo Sounds"   bits="8,8"   ids="On,Off"/>
     </switches>
-
 
     <remark>Pole Position (Namco, World)</remark>
     <mratimestamp>20260711000000</mratimestamp>

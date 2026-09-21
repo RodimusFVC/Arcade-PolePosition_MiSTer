@@ -56,8 +56,8 @@ port(
  view_gfx_data  : in  std_logic_vector(7 downto 0);
 
  -- INCR-video (2026-07-18): road / scalelut / sprite gfx ROMs (all in the top,
- -- ioctl idx1: road @0x14000, scalelut @0x19000, sprite small@0x2000 + big@0x6000
- -- -> combined sprite ROM @(ioctl_addr-0x2000)). The road/sprite generators drive addr.
+ -- ioctl idx1: road @0x18000, scalelut @0x1D000, sprite small@0x4000 + big@0x8000
+ -- -> combined sprite ROM @(ioctl_addr-0x4000)). The road/sprite generators drive addr.
  road_rom_addr  : out std_logic_vector(14 downto 0);
  road_rom_data  : in  std_logic_vector(7 downto 0);
  scalelut_addr  : out std_logic_vector(11 downto 0);
