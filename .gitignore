@@ -3,6 +3,6 @@ Claude/
 db/
 incremental_db/
 output_files/
-Useful Stuff/trace
+Useful Information/trace
 verilator/
 .token-savior-cache.json
