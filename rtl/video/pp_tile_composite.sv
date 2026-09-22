@@ -34,13 +34,13 @@ module pp_tile_composite
     // ---- ALPHA layer buffers/ROM ------------------------------------------
     output wire [10:0] alpha_scan_addr,
     input  wire [15:0] alpha_scan_dout,
-    output wire [11:0] alpha_gfx_addr,
+    output wire [12:0] alpha_gfx_addr,
     input  wire [7:0]  alpha_gfx_data,
 
     // ---- VIEW layer buffers/ROM -------------------------------------------
     output wire [10:0] view_scan_addr,
     input  wire [15:0] view_scan_dout,
-    output wire [11:0] view_gfx_addr,
+    output wire [12:0] view_gfx_addr,
     input  wire [7:0]  view_gfx_data,
     input  wire [15:0] view_hscroll,     // PP view h-scroll (z8002 @0xC000)
 

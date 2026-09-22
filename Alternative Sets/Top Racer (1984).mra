@@ -45,9 +45,9 @@
     <rom index="1" md5="none" zip="topracer.zip|polepos.zip">
         <!-- chars / tiles / sprites / bigsprites(GAP) / road / scalelut -->
         <part crc="b8217c96" name="tr28.bin"/>
-        <part repeat="4096">00</part>
+        <part crc="b8217c96" name="tr28.bin"/>
         <part crc="c6e15c21" name="tr29.bin"/>
-        <part repeat="4096">00</part>
+        <part crc="c6e15c21" name="tr29.bin"/>
         <part crc="9e1a9c3b" name="trus25.bin"/>
         <part crc="3b39a176" name="trus26.bin"/>
         <part crc="613ab0df" name="pp17.bin"/>

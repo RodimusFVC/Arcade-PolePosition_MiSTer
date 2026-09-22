@@ -45,14 +45,17 @@ port(
  dn_data        : in  std_logic_vector(7 downto 0);
  dn_wr          : in  std_logic;
 
+ -- PP2 IC25 protection overlay enable (MRA mod byte, index 7 bit 0).
+ ic25_en        : in  std_logic;
+
  -- INCR-1a (DIAG-REVERT-2026-07-13): chars (alpha) gfx ROM interface. The ROM
  -- lives in the top (loaded at ioctl index 1); the alpha renderer here drives addr.
- gfx_addr       : out std_logic_vector(11 downto 0);
+ gfx_addr       : out std_logic_vector(12 downto 0);
  gfx_data       : in  std_logic_vector(7 downto 0);
 
  -- INCR-view (2026-07-18): tiles (view/bg) gfx ROM interface. Sibling of the
  -- chars ROM; lives in the top (ioctl index 1 @0x1000); view renderer drives addr.
- view_gfx_addr  : out std_logic_vector(11 downto 0);
+ view_gfx_addr  : out std_logic_vector(12 downto 0);
  view_gfx_data  : in  std_logic_vector(7 downto 0);
 
  -- INCR-video (2026-07-18): road / scalelut / sprite gfx ROMs (all in the top,
@@ -475,11 +478,11 @@ architecture struct of poleposition is
    diag_swatch     : in  std_logic;   -- DIAG-REVERT-2026-08-16: palette swatch overlay
    alpha_scan_addr : out std_logic_vector(10 downto 0);
    alpha_scan_dout : in  std_logic_vector(15 downto 0);
-   alpha_gfx_addr  : out std_logic_vector(11 downto 0);
+   alpha_gfx_addr  : out std_logic_vector(12 downto 0);
    alpha_gfx_data  : in  std_logic_vector(7 downto 0);
    view_scan_addr  : out std_logic_vector(10 downto 0);
    view_scan_dout  : in  std_logic_vector(15 downto 0);
-   view_gfx_addr   : out std_logic_vector(11 downto 0);
+   view_gfx_addr   : out std_logic_vector(12 downto 0);
    view_gfx_data   : in  std_logic_vector(7 downto 0);
    view_hscroll    : in  std_logic_vector(15 downto 0);
    road_scan_addr  : out std_logic_vector(9 downto 0);
@@ -547,6 +550,7 @@ architecture struct of poleposition is
    ioctl_data       : in  std_logic_vector(7 downto 0);
    rom_wr           : in  std_logic;
    ioctl_wr_idx0    : in  std_logic;
+   ic25_en          : in  std_logic;
    scan_sprite_addr : in  std_logic_vector(10 downto 0);
    scan_sprite_dout : out std_logic_vector(15 downto 0);
    scan_road_addr   : in  std_logic_vector(9 downto 0);
@@ -821,6 +825,7 @@ port map(
 	ioctl_data       => dn_data,
 	rom_wr           => cpu_rom_wr,
 	ioctl_wr_idx0    => dn_wr,
+	ic25_en          => ic25_en,
 	scan_sprite_addr => sprite_scan_addr_w,
 	scan_sprite_dout => sprite_scan_dout_w,
 	scan_road_addr   => road_scan_addr_w,

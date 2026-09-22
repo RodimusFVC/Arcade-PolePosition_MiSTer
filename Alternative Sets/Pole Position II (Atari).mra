@@ -1,5 +1,5 @@
 <misterromdescription>
-    <name>Pole Position (Atari version 2)</name>
+    <name>Pole Position II (Atari)</name>
     <region>World</region>
     <homebrew>no</homebrew>
     <bootleg>no</bootleg>
@@ -7,12 +7,12 @@
     <alternative></alternative>
     <platform></platform>
     <series>Pole Position</series>
-    <year>1982</year>
+    <year>1983</year>
     <manufacturer>Namco (Atari license)</manufacturer>
     <category>Driving</category>
 
-    <setname>poleposa2</setname>
-    <parent>polepos</parent>
+    <setname>polepos2a</setname>
+    <parent>polepos2</parent>
     <mameversion>0289</mameversion>
     <rbf>PolePosition</rbf>
     <about></about>
@@ -24,57 +24,58 @@
     <players>1</players>
     <buttons names="Accelerate,Brake,Gear,Service Mode,Coin,Start 1P,Start 2P,Pause" default="A,B,X,Y,Select,Start,R,L"/>
 
-    <rom index="0" md5="none" zip="poleposa2.zip|polepos.zip">
+    <rom index="0" md5="none" zip="polepos2a.zip|polepos2.zip">
         <!-- maincpu (Z80) 0x0000-0x2FFF -->
-        <part crc="c918c043" name="136014-105.7h"/>
-        <part crc="7174bcb7" name="136014-116.7f"/>
+        <part crc="f85212c4" name="136014-180.7h"/>
+        <part crc="a9d4c380" name="136014-183.7f"/>
         <!-- sub1 (Z8002 #1), ROM_LOAD16_BYTE: even=HIGH=.8l, odd=LOW=.8m -->
         <interleave output="16">
-            <part crc="51018857" name="136014-102.4l" map="01"/>
-            <part crc="8c2cf172" name="136014-101.3l" map="10"/>
+            <part crc="7051df35" name="136014-177.4l" map="01"/>
+            <part crc="8aeaec98" name="136014-176.3l" map="10"/>
         </interleave>
         <part repeat="16384">00</part>
         <!-- sub2 (Z8002 #2) -->
         <interleave output="16">
-            <part crc="c52c98ed" name="136014-204.4e" map="01"/>
-            <part crc="eedea6e7" name="136014-203.3e" map="10"/>
+            <part crc="613e917d" name="136014-179.4e" map="01"/>
+            <part crc="eac35cfa" name="136014-178.3e" map="10"/>
         </interleave>
-        <part repeat="16384">00</part>
+        <interleave output="16">
+            <part crc="899de75e" name="136014-185.4d" map="01"/>
+            <part crc="d893c4ed" name="136014-184.3d" map="10"/>
+        </interleave>
     </rom>
 
-    <rom index="1" md5="none" zip="poleposa2.zip|polepos.zip">
+    <rom index="1" md5="none" zip="polepos2a.zip|polepos2.zip">
         <!-- chars / tiles / sprites / bigsprites(GAP) / road / scalelut -->
-        <part crc="a949aa85" name="136014-132.7n"/>
-        <part crc="a949aa85" name="136014-132.7n"/>
-        <part crc="706e888a" name="136014-133.6n"/>
-        <part crc="706e888a" name="136014-133.6n"/>
-        <part crc="e7a09c93" name="136014-125.13n"/>
-        <part crc="dee7d687" name="136014-126.12n"/>
+        <part crc="fbe5e72f" name="136014-172.7n"/>
+        <part crc="ec3ec6e6" name="136014-173.6n"/>
+        <part crc="455d79a0" name="136014-170.13n"/>
+        <part crc="78372b81" name="136014-171.12n"/>
         <part crc="2e134b46" name="136014-119.13j"/>
-        <part crc="a7e3a1c6" name="136014-121.13k"/>
-        <part crc="8992d381" name="136014-123.13l"/>
-        <part repeat="8192">00</part>
+        <part crc="2b0517bd" name="136014-166.13k"/>
+        <part crc="4d7916d9" name="136014-168.13l"/>
+        <part crc="bd6df480" name="136014-175.13m"/>
         <part crc="6f9997d2" name="136014-120.12j"/>
-        <part crc="6c5c6e68" name="136014-122.12k"/>
-        <part crc="111896ad" name="136014-124.12l"/>
-        <part repeat="8192">00</part>
+        <part crc="411e21b5" name="136014-167.12k"/>
+        <part crc="662ff24b" name="136014-169.12l"/>
+        <part crc="f0c571dc" name="136014-174.12m"/>
         <part crc="ee6b3315" name="136014-127.2l"/>
         <part crc="6d1e7042" name="136014-128.2m"/>
         <part crc="4e97f101" name="136014-134.2n"/>
         <part crc="a61bff15" name="136014-231.11n"/>
     </rom>
 
-    <rom index="2" md5="none" zip="poleposa2.zip|polepos.zip">
-        <part crc="f07ff2ad" name="136014-137.11e"/>
-        <part crc="adbde7d7" name="136014-138.11d"/>
-        <part crc="ddac786a" name="136014-139.11c"/>
-        <part crc="1e8d0491" name="136014-140.8m"/>
-        <part crc="0e4fe8a0" name="136014-141.5k"/>
+    <rom index="2" md5="none" zip="polepos2a.zip|polepos2.zip">
+        <part crc="16d69c31" name="136014-186.11e"/>
+        <part crc="07340311" name="136014-187.11d"/>
+        <part crc="1efc84d7" name="136014-188.11c"/>
+        <part crc="064d51a0" name="136014-189.8m"/>
+        <part crc="7880c5af" name="136014-190.5k"/>
         <part crc="2d502464" name="136014-142.2d"/>
         <part crc="027aa62c" name="136014-143.2c"/>
         <part crc="1f8d0df3" name="136014-144.2b"/>
-        <part crc="7afc7cfc" name="136014-145.4l"/>
-        <part crc="ca4ba741" name="136014-146.12h"/>
+        <part crc="8b270902" name="136014-191.4l"/>
+        <part crc="caddb0b0" name="136014-192.12h"/>
         <part crc="4330a51b" name="136014-135.6e"/>
         <part crc="4330a51b" name="136014-136.6d"/>
         <part crc="8568decc" name="136014-118.11d"/>
@@ -89,14 +90,21 @@
         </part>
     </rom>
 
+    <!-- Index 7: mod byte. bit0 = IC25 protection custom (machine
+         polepos2). Absent on PP1 and on polepos2b, which has real
+         ROM at sub1 0x4000-0x5FFF instead of the custom. -->
+    <rom index="7">
+        <part>01</part>
+    </rom>
+
     <!-- Index 4: nvram config -->
     <rom index="4"></rom>
     <nvram index="4" size="2034"></nvram>
 
-    <rom index="5" md5="none" zip="poleposa2.zip|polepos.zip">
+    <rom index="5" md5="none" zip="polepos2a.zip|polepos2.zip">
         <!-- engine sound, then 52xx voice padded to 0x8000 -->
-        <part crc="b5ad4d5f" name="136014-110.12f"/>
-        <part crc="8fdd2f6f" name="136014-111.12e"/>
+        <part crc="7d93bc1c" name="136014-181.12f"/>
+        <part crc="7d93bc1c" name="136014-182.12e"/>
         <part crc="5b4cf05e" name="136014-106.9c"/>
         <part repeat="24576">00</part>
     </rom>
@@ -108,19 +116,21 @@
         <part crc="3257d11e" name="52xx.bin"/>
     </rom>
 
-    <switches default="FF,74" base="0">
+    <switches default="FB,FF" base="0">
         <!-- DSWA -->
         <dip name="Coin A"        bits="5,7"   ids="Free Play,2C/1C,3C/2C,1C/2C,4C/3C,1C/3C,3C/1C,1C/1C"/>
         <dip name="Coin B"        bits="3,4"   ids="4C/3C,2C/1C,3C/2C,1C/1C"/>
-        <dip name="Game Time"     bits="1,2"   ids="120 secs,100 secs,110 secs,90 secs"/>
-        <dip name="Racing Laps"   bits="0,0"   ids="4,3"/>
+        <dip name="Speed Unit"    bits="2,2"   ids="mph,km/h"/>
+        <dip name="Demo Sounds"   bits="1,1"   ids="Off,On"/>
+        <dip name="Freeze"        bits="0,0"   ids="On,Off"/>
         <!-- DSWB -->
-        <dip name="Practice Rank" bits="13,15" ids="H,D,F,B,G,C,E,A"/>
-        <dip name="Extended Rank" bits="10,12" ids="H,D,F,B,G,C,E,A"/>
-        <dip name="Speed Unit"    bits="9,9"   ids="mph,km/h"/>
-        <dip name="Demo Sounds"   bits="8,8"   ids="On,Off"/>
+        <dip name="Speed"         bits="8,8"   ids="High,Average"/>
+        <dip name="Goal"          bits="9,10"  ids="6,3,5,4"/>
+        <dip name="Extended Rank" bits="11,12" ids="D,A,C,B"/>
+        <dip name="Practice Rank" bits="13,14" ids="D,A,C,B"/>
+        <dip name="Game Time"     bits="15,15" ids="120 secs,90 secs"/>
     </switches>
 
-    <remark>Pole Position (Atari, version 2)</remark>
+    <remark>Pole Position II (Atari)</remark>
     <mratimestamp>20260921000000</mratimestamp>
 </misterromdescription>

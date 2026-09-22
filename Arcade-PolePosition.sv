@@ -389,6 +389,17 @@ always @(posedge clk_sys) begin
 end
 
 wire rom_download = ioctl_download & !ioctl_index;
+
+// MRA mod byte -- ioctl INDEX 7, one byte at offset 0. Index 1 is the fleet
+// convention for this but is already the graphics stream here.
+//   bit0 = enable the PP2 IC25 protection custom (machine polepos2 only).
+// Absent in an MRA => stays 0 => PP1 and polepos2b behave exactly as before.
+reg [7:0] pp_mod = 8'd0;
+always @(posedge clk_sys) begin
+	if (ioctl_wr && (ioctl_index == 8'd7) && (ioctl_addr == 25'd0))
+		pp_mod <= ioctl_dout;
+end
+wire ic25_en = pp_mod[0];
 // Per vault Common-Pitfalls/"Core reset must include ioctl_download": hold the core
 // in reset for the WHOLE multi-index PP download (ioctl_download, not just index-0
 // rom_download), + ~pll_locked as the next-line cold-boot defense.
@@ -405,7 +416,7 @@ wire wdog_en = ~status[2];
 // ioctl INDEX 1, offset 0x0000, 0x1000 bytes (pp3_28.1f, crc 2e77187e). ioctl write
 // gate per vault: index==1 & addr<0x1000; write addr region-relative (ioctl_addr
 // resets to 0 at each index). Sync 1-clk read feeds the alpha renderer's gfx port.
-wire [11:0] chars_gfx_addr;
+wire [12:0] chars_gfx_addr;
 reg  [7:0]  chars_gfx_data;
 reg  [7:0]  chars_rom [0:8191];
 wire        chars_wr = ioctl_wr & (ioctl_index == 8'd1) & (ioctl_addr < 25'h2000);
@@ -417,7 +428,7 @@ end
 // TILES (view/bg) gfx ROM — ioctl INDEX 1, offset 0x1000-0x1FFF (sibling of the
 // chars ROM above; idx1 = chars@0x000 then tiles@0x1000). ioctl_addr[11:0] maps
 // 0x1000->0 within the region. Sync 1-clk read feeds the view renderer. 2026-07-18.
-wire [11:0] tiles_gfx_addr;
+wire [12:0] tiles_gfx_addr;
 reg  [7:0]  tiles_gfx_data;
 reg  [7:0]  tiles_rom [0:8191];
 wire        tiles_wr = ioctl_wr & (ioctl_index == 8'd1) & (ioctl_addr >= 25'h2000) & (ioctl_addr < 25'h4000);
@@ -564,6 +575,7 @@ poleposition poleposition
 	.dn_addr(ioctl_addr[16:0]),
 	.dn_data(ioctl_dout),
 	.dn_wr(ioctl_wr & rom_download),
+	.ic25_en(ic25_en),
 
 	.gfx_addr(chars_gfx_addr),
 	.gfx_data(chars_gfx_data),

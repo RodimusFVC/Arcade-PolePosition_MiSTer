@@ -61,7 +61,7 @@ module pp_tile_layer #(
     input  wire [15:0] scan_dout,    // COMBINATIONAL word read (same ce)
 
     // ---- gfx ROM read port (this layer's chars/tiles region) ----------------
-    output reg  [11:0] gfx_addr,     // registered; data valid next clk
+    output reg  [12:0] gfx_addr,     // registered; data valid next clk
     input  wire [7:0]  gfx_data,     // synchronous 1-clk read
 
     // ---- pixel output (combinational, aligned to hpos/vpos) -----------------
@@ -99,10 +99,11 @@ module pp_tile_layer #(
     assign scan_addr = fetch_index;
 
     // ---- fetch-stage decode (word -> gfx addresses + color) -----------------
-    wire [11:0] fetch_gfx_l, fetch_gfx_r;
+    wire [12:0] fetch_gfx_l, fetch_gfx_r;
     wire  [5:0] fetch_color;
     pp_tile_decode u_fetch (
         .tile_word (scan_dout),     // combinational fetch-tile word
+        .chacl     (chacl),
         .tile_code (),
         .tile_color(fetch_color),
         .row       (frow),
@@ -152,6 +153,7 @@ module pp_tile_layer #(
     // ---- display-stage serialize (combinational, col = intra-tile phase) ----
     pp_tile_decode u_disp (
         .tile_word (16'd0),         // unused on this instance
+        .chacl     (1'b1),
         .tile_code (),
         .tile_color(),
         .row       (3'd0),

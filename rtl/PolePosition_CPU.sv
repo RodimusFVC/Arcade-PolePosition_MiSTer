@@ -98,6 +98,7 @@ module PolePosition_CPU
     // ---- sub CPU subsystem (PolePosition_subcpu) -------------------------
     input  wire        ioctl_wr_idx0, // = ioctl_wr & (index==0), FULL range (sub ROM regions
                                        //   0x3000-0xAFFF/0xB000-0x12FFF decoded inside the subsystem)
+    input  wire        ic25_en,       // PP2 IC25 protection overlay (machine polepos2 only)
     // video-pipeline scanout: 4 INDEPENDENT read ports (see PolePosition_subcpu)
     input  wire [10:0] scan_sprite_addr,
     output wire [15:0] scan_sprite_dout,
@@ -351,6 +352,7 @@ module PolePosition_CPU
 
     PolePosition_subcpu subcpu
     (
+        .ic25_en      (ic25_en),
         .clk          (clk),
         .reset        (reset),
         .pause        (pause),          // PAUSE-GATE-2026-08-05: freeze both Z8002s

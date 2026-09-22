@@ -115,6 +115,11 @@ module PolePosition_subcpu
     input  wire  [7:0] dn_data,
     input  wire        dn_wr,
 
+    // PP2: enables the IC25 protection custom as a READ overlay on sub1
+    // 0x4000-0x5FFF. Set ONLY for machine polepos2 (polepos2/polepos2a).
+    // polepos2b is machine=polepos and has real ROM there -- keep it 0.
+    input  wire        ic25_en,
+
     // ---- debug ----------------------------------------------------------
     output wire [15:0] dbg1_pc,   dbg2_pc,
     output wire [15:0] dbg1_ir,   dbg2_ir,
@@ -600,7 +605,21 @@ module PolePosition_subcpu
     //  registered fetch (dedicated Port-B, no slot). Unmapped => hold defaults
     //  (16'hFFFF / 8'hFF) preserved inside the *_vram_qa muxes above.
     //------------------------------------------------------------------------
-    assign sub1_din = sub1_rom_sel ? sub1_rom_rd : sub1_vram_hold;
+    // IC25 (PP2 only) shadows the ROM for reads of 0x4000-0x5FFF.
+    // sub1_addr[15:13]==010 is that window; ~sub1_we keeps writes off it.
+    wire        sub1_ic25_sel = ic25_en & (sub1_addr[15:13] == 3'b010) & ~sub1_we;
+    wire [15:0] sub1_ic25_rd;
+
+    pp_ic25 u_ic25 (
+        .clk   (clk),
+        .rst_n (~reset),
+        .sel   (sub1_ic25_sel),
+        .addr  (sub1_addr[9:1]),
+        .dout  (sub1_ic25_rd)
+    );
+
+    assign sub1_din = sub1_ic25_sel ? sub1_ic25_rd
+                    : sub1_rom_sel  ? sub1_rom_rd : sub1_vram_hold;
     assign sub2_din = sub2_rom_sel ? sub2_rom_rd : sub2_vram_hold;
     assign vram_din = z80_vram_hold;
 

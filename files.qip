@@ -10,6 +10,7 @@ set_global_assignment -name SYSTEMVERILOG_FILE rtl/cpu/z8002/z8002.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/custom/adc0804.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/custom/pp_road_gen.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/custom/pp_sprite_gen.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/custom/pp_ic25.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/custom/pp_watchdog.sv
 set_global_assignment -name VERILOG_FILE       rtl/mister_custom/hiscore.v
 set_global_assignment -name VERILOG_FILE       rtl/mister_custom/pause.v

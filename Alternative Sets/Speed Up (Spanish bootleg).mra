@@ -45,9 +45,9 @@
     <rom index="1" md5="none" zip="ppspeed.zip|polepos.zip">
         <!-- chars / tiles / sprites / bigsprites(GAP) / road / scalelut -->
         <part crc="cd80b4c3" name="tr28.bin"/>
-        <part repeat="4096">00</part>
+        <part crc="cd80b4c3" name="tr28.bin"/>
         <part crc="c6e15c21" name="tr29.bin"/>
-        <part repeat="4096">00</part>
+        <part crc="c6e15c21" name="tr29.bin"/>
         <part crc="f44d33c1" name="tr25.bin"/>
         <part crc="87e8482d" name="tr26.bin"/>
         <part crc="613ab0df" name="tr17.bin"/>

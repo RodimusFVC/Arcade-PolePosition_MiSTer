@@ -32,14 +32,15 @@ module pp_tile_decode
 (
     // ---- tile attribute word (one scan_{alpha,view}_dout, 16-bit) -----------
     input  wire [15:0] tile_word,
-    output wire  [8:0] tile_code,      // 9-bit; bit8 = word[14] (see #unverified)
+    input  wire        chacl,          // alpha: LS259 q7. 0 => code masked to 8b
+    output wire  [8:0] tile_code,      // 9-bit; bit8 = word[14]
     output wire  [5:0] tile_color,     // 6-bit indirect-palette selector
 
     // ---- gfx ROM byte-address generation (2bpp, planes {0,4}) ---------------
     input  wire  [2:0] row,            // intra-tile row 0..7 (caller pre-applies
                                        //   any global V-flip)
-    output wire [11:0] gfx_addr_l,     // LEFT  half (x0..3) = {code8, 1'b0, row}
-    output wire [11:0] gfx_addr_r,     // RIGHT half (x4..7) = {code8, 1'b1, row}
+    output wire [12:0] gfx_addr_l,     // LEFT  half (x0..3) = {code9, 1'b0, row}
+    output wire [12:0] gfx_addr_r,     // RIGHT half (x4..7) = {code9, 1'b1, row}
 
     // ---- 2bpp nibble-planar serialize ---------------------------------------
     input  wire  [7:0] gfx_byte_l,     // fetched byte @ gfx_addr_l
@@ -55,18 +56,20 @@ module pp_tile_decode
     assign tile_code  = { tile_word[14], tile_word[7:0] };
     assign tile_color = tile_word[13:8];
 
-    // #unverified (video_mapping §7 open question): code bit8 (word[14]) makes a
-    // 9-bit code against a 256-tile / 0x1000-byte region. Real HW may wrap
-    // mod-256, OR word[14] may be a dead / bank-select line. We DROP it here
-    // (mask to code[7:0]) — the safe "fits the 0x1000 region exactly" default.
-    // Revisit only if attract/boot art shows wrong-tile artifacts.
-    wire [7:0] code8 = tile_code[7:0];
+    // Code bit8 (word[14]) is LIVE: PP2 has 512 tiles. chacl==0 masks it to 8
+    // bits on the alpha layer only (polepos_v.cpp:162-166); the view layer ties
+    // chacl=1, matching bg_get_tile_info which has no such mask. PP1 needs no
+    // per-game gate: its MRA mirrors the 0x1000 chars/tiles ROM across the
+    // 0x2000 window, so code 256+N reads tile N -- what a 4 KB ROM with no A12
+    // does on real hardware, and what MAME's `code %= total_elements` does
+    // (charlayout_2bpp is RGN_FRAC(1,1), so elements track the region size).
+    wire [8:0] code9 = chacl ? tile_code : { 1'b0, tile_code[7:0] };
 
     // ---- gfx ROM byte address (charlayout_2bpp) ------------------------------
     //   16 bytes/tile; per row y two bytes: offset y = LEFT 4px, 8+y = RIGHT 4px.
     //   addr = {code8, half, row}  (half 0=left, 1=right)  -> 12 bits = 0x1000.
-    assign gfx_addr_l = { code8, 1'b0, row };
-    assign gfx_addr_r = { code8, 1'b1, row };
+    assign gfx_addr_l = { code9, 1'b0, row };
+    assign gfx_addr_r = { code9, 1'b1, row };
 
     // ---- 2bpp serialize ------------------------------------------------------
     //   Derived directly from MAME's charlayout_2bpp (Useful Stuff/mame/polepos.cpp:820-829):
