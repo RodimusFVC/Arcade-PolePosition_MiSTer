@@ -96,7 +96,7 @@ port(
  dip_switch_b   : in std_logic_vector (7 downto 0);
 
  flip           : in std_logic;
- h_offset	: in signed(3 downto 0);
+ h_offset	: in signed(5 downto 0);
  v_offset	: in signed(3 downto 0);
  diag_swatch    : in std_logic;
 
@@ -562,7 +562,7 @@ architecture struct of poleposition is
    blank_h  : out std_logic;
    blank_v  : out std_logic;
    blankn   : out std_logic;
-   h_offset : in  signed(3 downto 0);
+   h_offset : in  signed(5 downto 0);
    v_offset : in  signed(3 downto 0)
  );
  end component;

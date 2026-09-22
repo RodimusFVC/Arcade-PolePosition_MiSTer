@@ -25,7 +25,7 @@ module gen_video (
     output wire         blank_h,
     output wire         blank_v,
     output logic        blankn,
-    input  wire signed [3:0] h_offset,
+    input  wire signed [5:0] h_offset,
     input  wire signed [3:0] v_offset
 );
 
@@ -42,6 +42,7 @@ module gen_video (
     // VHDL: signal hsync_base, vsync_base : integer;  (no initializer -> power-up
     // state undefined until first assignment, same here)
     integer hsync_base;
+    integer hsync_end;
     integer vsync_base;
 
     // 32-bit zero-extended views of the unsigned counters, used only where they
@@ -89,10 +90,20 @@ module gen_video (
             // VHDL: hsync_base <= 495 + to_integer(resize(h_offset, 9));
             // h_offset is signed; the explicit int'() cast sign-extends it to 32
             // bits before the add, matching the VHDL resize()+to_integer() step.
-            hsync_base <= 495 + int'(h_offset);
+            // Sync sits inside the blanking interval (hcnt 128..255): active is
+            // 256..511, so 177 gives front porch 49 / sync 29 / back porch 50.
+            // It previously sat at 495, overlapping the last 17 active pixels and
+            // leaving a 115-count back porch -- invisible on the scaler (which crops
+            // on blank_h) but pushed the picture hard right on an analog CRT.
+            // hsync_end is computed, not hardcoded: the old -384 term assumed the
+            // pulse wrapped past 511 and would never match once it no longer does.
+            hsync_base <= 177 + int'(h_offset);
+            hsync_end  <= ((177 + int'(h_offset) + 29) > 511)
+                        ?  (177 + int'(h_offset) + 29 - 384)
+                        :  (177 + int'(h_offset) + 29);
             if (hcnt32 == hsync_base) begin
-                hsync0 <= 1'b0;    // 1
-            end else if (hcnt32 == (hsync_base+29-384)) begin
+                hsync0 <= 1'b0;
+            end else if (hcnt32 == hsync_end) begin
                 hsync0 <= 1'b1;
             end
 
