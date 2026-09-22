@@ -1,8 +1,9 @@
 <p align="center">
-  <img src="Useful Information/DragonsLair.png" width="800">
+  <img src="Useful Information/PolePosition.png" width="800">
+  <img src="Useful Information/PolePositionII.png" width="800">
 </p>
 
-<h1 align="center">Dragon's Lair FPGA Core</h1>
+<h1 align="center">Pole Position FPGA Core</h1>
 
 <p align="center">
   Arcade hardware implementation for MiSTer FPGA
@@ -12,20 +13,20 @@
 
 ## Overview
 
-FPGA implementation of **Dragon's Lair (1983)**, originally developed and released by Cinematronics.
+FPGA implementation of **Pole Position (1982)** and **Pole Position II (1983)**, originally developed and released by Namco.
 
 This core targets MiSTer FPGA and aims for accurate gameplay behavior, video timing, and sound reproduction.
 
 ---
 
-## Core Information
+## Game Information
 
 | Field        | Value |
 |--------------|--------|
-| Core Name    | DragonsLair |
-| Year         | 1983 |
-| Developer    | Cinematronics |
-| Genre        | LaserDisc |
+| Title        | Pole Position |
+| Year         | 1982 |
+| Developer    | Namco |
+| Genre        | Driving |
 | Players      | 1–2 alternating |
 
 ---
@@ -34,27 +35,13 @@ This core targets MiSTer FPGA and aims for accurate gameplay behavior, video tim
 
 Default MiSTer gamepad mapping:
 
-| Dragon's Lair |
 | Input | Action |
 |-------|--------|
-| D-Pad / Joystick | Move |
-| A | Sword |
-| B | Not Used |
-| X | Not Used |
-| Y | Not Used |
-| Select | Insert Coin |
-| Start | 1 Player Start |
-| Right Shoulder | 2 Player Start |
-| Left Shoulder | Pause |
-
-| Space Ace |
-| Input | Action |
-|-------|--------|
-| D-Pad / Joystick | Move |
-| A | Fire / Energize |
-| B | Cadet Level Select |
-| X | Captian Level Select |
-| Y | Space Ace Level Select |
+| D-Pad / Joystick | Steering |
+| A | Accelerate |
+| B | Brake |
+| X | Gear |
+| Y | Service Mode |
 | Select | Insert Coin |
 | Start | 1 Player Start |
 | Right Shoulder | 2 Player Start |
@@ -65,7 +52,9 @@ Default MiSTer gamepad mapping:
 ## Features
 
 - Arcade-accurate CPU timing
-- LaserDisc Simulated, but not fully accurate
+- Namco 5xxx custom MCUs implemented
+- Sprite scaling and road rendering
+- High score saving support
 - MiSTer-compatible .mra provided
 - Verified ROM definitions with checksums
 
@@ -93,7 +82,7 @@ https://github.com/MiSTer-devel/Main_MiSTer/wiki/Arcade-Roms
 ## Installation
 
 1. Copy the core `.rbf` file to your MiSTer `/_Arcade/cores` folder.
-2. Copy the '.mra' file to your MiSTer '/_Arcade' folder.
+2. Copy the `.mra` file to your MiSTer `/_Arcade` folder.
 3. Place the appropriate ROM `.zip` files in your `/games/mame` directory.
 4. Launch the core from the MiSTer Arcade menu.
 
@@ -111,7 +100,7 @@ Do not request ROM files in issues or discussions.
 
 ## Credits
 
-FPGA core development: RodimusFVC 
-Original arcade game © Cinematronics
+FPGA core development: RodimusFVC  
+Original arcade game © Namco (1982)
 
 ---
