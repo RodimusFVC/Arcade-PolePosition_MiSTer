@@ -76,14 +76,7 @@ module pp_road_gen
     // ======================= generation FSM (clk-paced) ====================
     localparam [3:0] G_IDLE=0, G_SET0=1, G_SET1=2, G_CHUNK=3, G_RDC=4,
                      G_RDB1=5, G_RDB2=6, G_PIX=7, G_FILL=8, G_DONE=9,
-    // SCAN-LATENCY-FIX-2026-08-06: G_SET0W/G_SET1W are wait states that absorb the
-    // 1-clock latency of the scan_road read (see the assign below).
                      G_SET0W=10, G_SET1W=11,
-    // ROMLATENCY-FIX-2026-08-11: G_RDB3 absorbs the SAME 1-clock latency for the
-    // road ROM port that SCAN-LATENCY-FIX-2026-08-06 fixed for scan_road. The
-    // captures were all one fetch early: ctrl_b took the pre-edge bus value
-    // (0x00), b1_b took the CONTROL byte, b2_b took the BITS1 byte. Measured
-    // 2026-08-11: 497/498 chunks mismatched road.bin in exactly that pattern.
                      G_RDB3=12;
     reg [3:0]  gstate;
     reg [8:0]  ygen;                    // scanline being generated
@@ -100,21 +93,6 @@ module pp_road_gen
     reg [3:0]  pix;                     // 8..1 pixel counter within a chunk
     reg [8:0]  ygen_prev;               // vpos edge detect (scanline kick)
 
-    // scan_road address is combinational off the FSM, but the DATA COMES BACK ONE
-    // CLOCK LATER. SCAN-LATENCY-FIX-2026-08-06: the old comment here claimed "dout is
-    // same-cycle" and the FSM consumed scan_road_dout in the very state that drove the
-    // address. That was false: PolePosition_subcpu.sv:426-429 registers this read
-    // (`road_lo_qb <= road_lo[scan_road_addr]`) so it can infer BRAM. Consequence on
-    // real HW: xoffs was loaded from whatever address was presented during G_IDLE, not
-    // from road16[0x380+y], so nearly every scanline's xoffs was garbage; once
-    // xoffs >= 0x200 the G_CHUNK blank-fill path writes pen 0 (transparent) for the
-    // rest of the line, which is why the road appeared as a ~32px block at top-left
-    // with the rest of the road area transparent.
-    // This went undetected because verilator/road/sim_main.cpp modelled the RAM
-    // COMBINATIONALLY (`scan_road_dout = road16_memory[scan_road_addr]`), satisfying
-    // the false assumption — the rig has been corrected to match the registered read.
-    // The address is now held across {G_SET0,G_SET0W} and {G_SET1,G_SET1W}; each
-    // value is consumed in the W state, one clock after its address went out.
     assign scan_road_addr = (gstate == G_SET0 || gstate == G_SET0W)
                                 ? (10'h380 + {3'd0, ygen[6:0]})
                                 : {1'b0, yoffs};   // G_SET1/G_SET1W use yoffs (9-bit)
@@ -138,8 +116,6 @@ module pp_road_gen
             // kick generation of scanline ygen into bank gbank
             gstate <= G_SET0;
         end
-        // SCAN-LATENCY-FIX-2026-08-06: address goes out in G_SET0, data is consumed one
-        // clock later in G_SET0W. Same split for G_SET1/G_SET1W.
         G_SET0: begin
             // yoffs = (vposmod[y] + vscroll) >> 3 & 0x1ff  (ready for G_SET1's scan read)
             yoffs <= ((vposmod[ygen[7:0]] + road_vscroll) >> 3) & 12'h1ff;
@@ -173,17 +149,6 @@ module pp_road_gen
                 gstate <= G_RDC;
             end
         end
-        // ROMLATENCY-FIX-2026-08-11 -----------------------------------------
-        // road_rom_data is a REGISTERED read: the byte for the address issued in
-        // state N only becomes visible at the END of state N+1. The old code
-        // captured in state N+1, which latches the PREVIOUS address's byte --
-        // every capture was one fetch early. Each read now issues its address one
-        // state ahead of its capture, and G_RDB3 catches the last one.
-        //   G_CHUNK issues ctrl addr | G_RDC issues bits1 addr (no capture)
-        //   G_RDB1  captures ctrl, issues bits2 addr
-        //   G_RDB2  captures bits1
-        //   G_RDB3  captures bits2, seeds roadval/carin
-        // Cost: one extra state per chunk -> 33*13 = 429 clk of the 3072 clk line.
         G_RDC: begin
             road_rom_addr <= 15'h2000 + {2'd0, romoffs};   // bits1 @ 0x2000+romoffs
             gstate <= G_RDB1;
@@ -239,7 +204,7 @@ module pp_road_gen
     end
 
     // ======================= output (ce-paced read) ========================
-    // AREA FIX 2026-07-19: this read was combinational (`assign road_index = linebuf[..]`),
+    // this read was combinational (`assign road_index = linebuf[..]`),
     // which BLOCKS BRAM inference -- Quartus reported "uninferred due to asynchronous read
     // logic" and built the whole 1024x10 buffer out of flip-flops + a 1024:1 mux
     // (pp_road_gen was 7,306 ALMs). BRAM reads are synchronous, so the read is now

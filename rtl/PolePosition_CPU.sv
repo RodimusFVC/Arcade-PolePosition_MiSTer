@@ -83,11 +83,6 @@ module PolePosition_CPU
     // ---- watchdog (0xA100) -----------------------------------------------------
     output wire        watchdog_wr,
 
-    // ---- ILLEGAL-SCREAM-2026-08-09 ---------------------------------------------
-    // Sticky "one of the Z8002 subs hit an unimplemented opcode" flag. z8002.sv's
-    // S_ILLEGAL is a TERMINAL state with mreq deasserted -- the sub just stops dead,
-    // silently. Without this the only symptom is frozen road/sprite/view buffers,
-    // which reads as a rendering bug. Routed to LED_USER at the top level.
     output wire        sub_illegal,
 
     // ---- ROM load (ioctl) — maincpu region of the index-0 stream (0x0000-0x2FFF)
@@ -111,11 +106,6 @@ module PolePosition_CPU
     output wire [15:0] hscroll,       // view16_hscroll (z8002_map 0xC000)
     output wire [15:0] vscroll,       // road16_vscroll (z8002_map 0xC100)
 
-    // ---- HISCORE-NVRAM-2026-09-20: hiscore access to the NVRAM's free port B --
-    // Scores live in the battery-backed NVRAM (Z80 0x3000-0x37FF). hiscore.dat:
-    //   @:maincpu,program,3000,7f2,b0,95
-    // 11-bit address == the 2 KB NVRAM == hiscore.v's HS_ADDRESSWIDTH(11), so
-    // hs_address indexes the NVRAM directly with no offset.
     input  wire [10:0] hs_address,
     output wire  [7:0] hs_data_out,   // NVRAM -> hiscore  (data_from_ram)
     input  wire  [7:0] hs_data_in,    // hiscore -> NVRAM  (data_to_ram)
@@ -266,9 +256,6 @@ module PolePosition_CPU
         .wren_a   (cs_nvram & wr_s),
         .q_a      (nvram_D),
 
-        // HISCORE-NVRAM-2026-09-20: port B was unused (address_b tied to 0).
-        // It is now the hiscore module's read/write window into the NVRAM.
-        // Original: .address_b(11'd0)  with no data_b/wren_b/q_b.
         .clock_b  (clk),
         .address_b(hs_address),
         .data_b   (hs_data_in),
@@ -294,18 +281,6 @@ module PolePosition_CPU
     //------------------------------------------------------------------------
     assign vram_addr    = cpu_A[12:0];
     assign vram_dout    = cpu_Dout;
-    // VRAM-WR-RACE-FIX-2026-07-27: was `cs_vram & wr_s` (wr_s = ~n_wr & cen, a
-    // single fabric-clock pulse). PolePosition_subcpu.sv's Port-A arbiter only
-    // grants the Z80 5 of 16 `div` slots (own_z80 = div<=4) and its own comment
-    // assumes "writes are idempotent across the owner's whole slot (bus held
-    // stable)" -- false for a 1-clk pulse racing an independently-phased
-    // counter (div resets with `reset`; cen_cnt upstream never does). Co-sim
-    // (verilator/pp_maincpu) measured EVERY Z80 VRAM write landing at div=5,
-    // outside own_z80, 40/40 samples -- writes were silently dropped 100% of
-    // the time. Hold vram_wr for the whole ~n_wr-active window (~2 T-states,
-    // longer than one 16-cycle div period) so it's guaranteed to overlap an
-    // own_z80 slot regardless of phase. wr_s itself is untouched (still used
-    // for the single-pulse-safe local registers: latch, nvram, sndram, etc).
     assign vram_wr      = cs_vram & ~n_wr;
     assign vram_rd      = cs_vram & rd_s;
 
@@ -387,11 +362,6 @@ module PolePosition_CPU
         .dbg1_ir      (), .dbg2_ir      (),
         .dbg1_fcw     (), .dbg2_fcw     (),
         .dbg1_retire  (), .dbg2_retire  (),
-        // ILLEGAL-SCREAM-2026-08-09: these were BOTH left open, so a Z8002
-        // S_ILLEGAL (a silent terminal hang) was completely invisible on
-        // hardware -- it presented as a video bug and cost weeks. Surfaced now
-        // and routed to LED_USER in Arcade-PolePosition.sv. Latched in z8002.sv,
-        // so once lit it stays lit until reset.
         .dbg1_illegal (sub1_illegal_w), .dbg2_illegal (sub2_illegal_w),
         .dbg1_regs    (), .dbg2_regs    ()
     );

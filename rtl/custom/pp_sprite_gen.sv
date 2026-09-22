@@ -34,7 +34,6 @@ module pp_sprite_gen
     input  wire [8:0]  vpos,
 
     output wire [10:0] scan_sprite_addr,   // sprite16_memory, REGISTERED read (1 clk)
-                                           // -- see SCAN-LATENCY-FIX-2026-08-06 below
     input  wire [15:0] scan_sprite_dout,
 
     output reg  [11:0] scalelut_addr,      // scalelut ROM (0x1000), 1-clk sync
@@ -65,17 +64,7 @@ module pp_sprite_gen
     localparam [3:0] S_IDLE=0, S_CLR=1, S_A0=2, S_A1=3, S_A2=4, S_A3=5,
                      S_CALC=6, S_CALC2=13, S_SCALE=7, S_DSET=8, S_FLO=9,
                      S_FHI=10, S_PIX=11, S_DONE=12,
-    // SCAN-LATENCY-FIX-2026-08-06: S_A4 absorbs the 1-clock scan_sprite read latency
-    // (the attribute captures below each shifted one state later).
                      S_A4=14,
-    // SPRLATENCY-FIX-2026-08-11: S_FLOW does for the sprGFX reads what S_A4 did
-    // for the attribute reads and G_RDB3 did for pp_road_gen's road ROM -- absorb
-    // the 1-clock registered-ROM latency. Before this, BOTH gfx bytes were wrong:
-    //   S_FHI captured rom[PREVIOUS hi addr] into byte_lo, and
-    //   S_PIX read rom[byte_lo_a] (the LOW byte) as its planes-2/3 HIGH byte.
-    // Same defect class as ROMLATENCY-FIX-2026-08-11, which was MEASURED on the
-    // road path (497/498 chunks wrong). ⚠️ This sprite instance is fixed by
-    // construction, NOT measured -- see the note in Claude/.
                      S_FLOW=15;
     reg [3:0]  st;
     reg [8:0]  ygen, ygen_prev;
@@ -116,25 +105,11 @@ module pp_sprite_gen
     wire [16:0] blo_big   = 17'h04000 + {code, 8'd0} + {6'd0, dy, 3'd0} + {14'd0, col[4:2]}; // +code*256+dy*8+..
     wire [16:0] byte_lo_a = big ? blo_big : blo_small;
     wire [16:0] hi_off    = big ? 17'h08000 : 17'h02000;
-    // MSB-first plane bits (assumption to confirm in co-sim): plane0=bit(7-cq),
-    // plane1=bit(3-cq); high byte gives planes 2/3 the same way.
     wire p0b = byte_lo    [3'd7 - {1'b0, cq}];
     wire p1b = byte_lo    [3'd3 - {1'b0, cq}];
     wire p2b = sprgfx_data[3'd7 - {1'b0, cq}];
     wire p3b = sprgfx_data[3'd3 - {1'b0, cq}];
-    // DIAG-REVERT-2026-08-16: original below, uncomment to restore
-    // wire [3:0] pen = {p3b, p2b, p1b, p0b};
     wire [3:0] pen = {p0b, p1b, p2b, p3b};   // DIAG: pen bit order REVERSED
-    // Tests "sprites are the right shape but the colours are swapped" =
-    // reversed pen bit order. Pens 0 and 15 are fixed points under reversal,
-    // so the transparent pen and the silhouette are unchanged while every
-    // other pen swaps in pairs (1<->8, 2<->4, 3<->12, 5<->10, 7<->14, 11<->13).
-    // ⚠️ NOT a confirmed fix. Counter-evidence, recorded so it isn't lost:
-    // pp_tile_decode.sv:88 (`pixel = {sel_byte[bit_p1], sel_byte[bit_p0]}`) is
-    // the WORKING alpha/view layer and uses plane0->LSB, the SAME convention
-    // this line originally had. If the HW result is "no change" or "worse",
-    // revert and go after the OTHER orderings instead: the x-within-nibble
-    // direction and which half-byte carries which plane pair.
     wire pen_transp = (sprite_prom[{color, pen}] == 4'hF);
 
     // ---- DDA next-siz (MAME: siz+=1+sizex; if(siz&0x40){siz&=0x3f; xx++}) ---
@@ -149,19 +124,10 @@ module pp_sprite_gen
             clr_i <= clr_i + 9'd1;
             if (clr_i[7:0] == 8'hff) begin spr <= 6'd0; attr_sel <= 2'd0; st <= S_A0; end
         end
-        // SCAN-LATENCY-FIX-2026-08-06: scan_sprite is a REGISTERED read in
-        // PolePosition_subcpu.sv:411-414 (`sprite_lo_qb <= sprite_lo[scan_sprite_addr]`,
-        // done to infer BRAM), NOT the combinational read this port's declaration still
-        // advertised. Each capture below used to sit in the same state that first drove
-        // its address, so every attribute word landed one state early: p0w took stale
-        // data left over from S_CLR, p1w took p0's word, s0w took p1's, s1w took s0's.
-        // S_CALC derives sx from p1w and the scale from s0w/s1w, so the sprite came out
-        // at the wrong X and the wrong size -- the squashed sprite at the left edge.
-        // Address now goes out one state ahead of its capture; attr_sel stays at 3
-        // through S_A4 so addr3 is still presented when s1w samples it.
         S_A0: begin                          attr_sel <= 2'd1; st <= S_A1; end  // addr0 out
         S_A1: begin p0w <= scan_sprite_dout; attr_sel <= 2'd2; st <= S_A2; end  // = mem[addr0]
         S_A2: begin p1w <= scan_sprite_dout; attr_sel <= 2'd3; st <= S_A3; end  // = mem[addr1]
+        // S_A4 absorbs the 1-clock scan_sprite read latency.
         S_A3: begin s0w <= scan_sprite_dout;                   st <= S_A4; end  // = mem[addr2]
         S_A4: begin s1w <= scan_sprite_dout;                   st <= S_CALC; end// = mem[addr3]
         S_CALC: begin
@@ -189,13 +155,6 @@ module pp_sprite_gen
             xcnt <= big ? 7'h40 : 7'h20;
             st   <= S_FLO;
         end
-        // SPRLATENCY-FIX-2026-08-11: each address is now issued one state before
-        // its data is consumed. Was:
-        //   S_FLO: sprgfx_addr <= byte_lo_a;                            -> S_FHI
-        //   S_FHI: byte_lo <= sprgfx_data; sprgfx_addr <= byte_lo_a+hi_off; -> S_PIX
-        // which captured one fetch early on both bytes.
-        //   S_FLO  issues LOW addr   | S_FLOW issues HIGH addr
-        //   S_FHI  captures LOW byte (valid now) | S_PIX sees HIGH byte live
         S_FLO:  begin sprgfx_addr <= byte_lo_a;             st <= S_FLOW; end
         S_FLOW: begin sprgfx_addr <= byte_lo_a + hi_off;    st <= S_FHI;  end
         S_FHI:  begin byte_lo    <= sprgfx_data;            st <= S_PIX;  end

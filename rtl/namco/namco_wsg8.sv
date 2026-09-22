@@ -108,12 +108,6 @@ module namco_wsg8
     input  wire        clk,          // CLK_49M fabric clock (49.152 MHz)
     input  wire        reset,
     input  wire        sound_en,     // LS259 q2, MAME sound_enable_w (active-high, NOT inverted)
-    // PAUSE-GATE-2026-08-05: gate the 48 kHz sample tick, not the audio output.
-    // Gating the CHIP (not just the CPU that writes it) is what makes voices
-    // freeze mid-note instead of ringing on / drifting while paused, and it
-    // resumes at exactly the same phase. Do NOT "fix" this by muting `audio`
-    // instead -- that stops the sound but lets the voice counters advance.
-    // Canonical: vault note "Pause must gate every clock domain".
     input  wire        pause,
 
     // ---- Z80-side register bus (PolePosition_CPU.sv wsg_* ports) -----------

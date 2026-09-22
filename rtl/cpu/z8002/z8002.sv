@@ -263,15 +263,13 @@ module z8002
     // decimal-adjusted byte, bit8=carry-out. ====
     reg [8:0] dab_rom [0:2047];
     `include "z8002_dab_rom.svh"
-    // BATCH 9 2026-07-28: cycle-accuracy padding counters (see the S_FETCH0 gate below).
-    // Max cycle count among implemented opcodes is 744 (DIVL); 16 bits is generous headroom.
     reg [15:0] target_cycles, cyc_count;
     `include "z8002_cycle_lookup.svh"
     reg [15:0] pc, fcw, ir, operand, ea;
     reg [15:0] psap;           // PSA pointer (control reg, LDCTL psapoff) - reset 0
     reg        nvi_pending;    // set on nvi_n ASSERT edge, cleared on NVI accept
     reg        nvi_n_d;        // NVIEDGE-2026-09-05: previous nvi_n, for edge detect
-    // BATCH 17 2026-08-09: real internal-trap infrastructure (EPU/privileged-instruction
+    // real internal-trap infrastructure (EPU/privileged-instruction
     // trap/system-call), modeled EXACTLY on the already-verified NVI accept sequence
     // (S_NVI_PC/FCW/VEC/RDFCW/RDPC) -- push PC, push OLD fcw, push the trapping opcode
     // word (MAME: "for internal traps, the 1st word of the instruction is pushed",
@@ -295,7 +293,7 @@ module z8002
     reg [15:0] trap_vec;
     localparam [15:0] VEC_EPU=16'h0004, VEC_TRAP=16'h0008, VEC_SYSCALL=16'h000C;
 
-    // BATCH 19 2026-08-09: real 0x3A/0x3B port I/O -- single (INB/SINB/OUTB/SOUTB and
+    // real 0x3A/0x3B port I/O -- single (INB/SINB/OUTB/SOUTB and
     // word siblings, NIB3=0100-0111) and self-repeating block (INIB/SINIB/OUTIB/SOUTIB/
     // INDB/SINDB/OUTDB/SOUTDB and word siblings, NIB3=0000-0011/1000-1011). Shared
     // between 0x3A(byte)/0x3B(word) via `io_wide` (set from the decoded top byte).
@@ -333,18 +331,7 @@ module z8002
     // BIT/BITB/RES/SET @Rd,#imm4 family.
     reg [15:0] operand2, bmask;
     reg        bitop_set;
-    // BATCH 7 2026-07-27: LDA prd,addr[(rs)] (0x76) mode select -- `addr` alone
-    // (NIB2==0) vs `addr(rs)` (NIB2!=0, adds R[src]). Can't use src==0 as a
-    // sentinel since R0 is a real, valid source register.
     reg        lda76_has_src;
-    // BATCH 16 2026-08-09: JP cc,addr[(rd)] (0x5E) mode select -- same "can't use
-    // idxr==0 as a sentinel, R0 is a real register" reasoning as lda76_has_src above.
-    // BUG FIX: the pre-existing decode arm matched the WHOLE 0x5E00-0x5EFF range with
-    // no NIB2 check at all, and S_JP's jump target was just the fetched `addr` word
-    // with no index addend -- so the indexed form (0x5E10-0x5EFF) silently computed
-    // the WRONG jump target (missing +R[idxr]) while still being accepted (not
-    // illegal), invisible to every gap-count metric. Found while auditing Batch 11-15
-    // work, fixed this batch with dedicated optest coverage (see z8002_optest).
     reg        jpx;
     // BATCH 3: RQ (quad, 4x16-bit) base register index for MULTL/DIVL = {dst[3:2],2'b00}
     // (MAME `#define RQ(n) m_regs.Q[(n)>>2]` truncates the low TWO bits of n, one level
@@ -512,17 +499,6 @@ module z8002
                      S_TESTI_RD=137,
                      S_TSETI_RD=138,  S_TSETI_WR=139,
                      S_CLRI_WR=140;
-    // ---- BATCH 6 additions (this session): 0x40-0x4B ALU addr[,(rs)] direct/indexed
-    // forms (task item 1), 0x1000-0x100F CPL rrd,imm32 (task item 2), plus a set-diff-
-    // driven sweep of cheap real gaps the mechanical audit turned up: 0x28-0x2B
-    // register-indirect INCB/INC/DECB/DEC @rd; 0x68/0x6A byte INC/DEC addr direct/
-    // indexed (byte siblings of the already-implemented word 0x69/0x6B); missing
-    // indexed arms for LD rd,addr(rs)/LD addr(rs),rs (0x61/0x6F NIB2!=0); and a large
-    // batch of register-ONLY closures with zero memory access (0x8C/0x8D remaining
-    // sub-ops, 0x9C TESTL, 0xA2-0xA7 register-direct bit ops, 0xAE/0xAF TCCB/TCC,
-    // 0xBC/0xBD/0xBE RLDB/LDK/RRDB, 0xB1d7 EXTSL, 0xC0-0xCF LD rd,imm8 short form --
-    // these need NO new states at all, added directly in S_FETCH0). See report for the
-    // full set-diff and the (large) explicitly-deferred remainder.
     localparam [7:0]
                      // 0x40-0x4B ALU addr[,(rs)]: FETCH computes ea (direct/indexed,
                      // Batch-4 shape), RD reads @ea and stages `operand`, then joins the
@@ -541,17 +517,6 @@ module z8002
                      // 0x28-0x2B INCB/INC/DECB/DEC @rd: EA=R[dst] directly (no address
                      // word to fetch at all) -- mirrors S_INCDA_RD/WR one level more direct.
                      S_INCBI_RD=155, S_INCBI_WR=156, S_INCWI_RD=157, S_INCWI_WR=158;
-    // ---- AREA FIX 2026-07-19: sequential divider states ----
-    // DIV/DIVL previously used combinational `/` and `%`. Quartus inferred FOUR
-    // lpm_divide instances per CPU (Div0/Mod0 32-bit, Div1/Mod1 64-bit) because
-    // `/` and `%` on identical operands are NOT common-subexpression-eliminated:
-    //   Div0 537 + Mod0 552 + Div1 2107 + Mod1 2060 = 5256 ALMs *per z8002*,
-    //   x2 instances = ~10.5k ALMs = 25% of the 5CSEBA6U23I7. Fit hit 95%.
-    // Replaced by ONE shared restoring (shift-subtract) divider producing quotient
-    // AND remainder from a single datapath, shared between DIV and DIVL. 64 cycles.
-    // This is also closer to real Z8002 timing (DIV 92-107 cyc, DIVL 744+ cyc) than
-    // the previous single-cycle form. Bus stays idle in these states: not listed in
-    // the `addr` mux (defaults to `pc`) and not in `we` -- read-only, no side effects.
     localparam [7:0]
                      S_DIV_BUSY=159, S_DIV_FIN=160, S_DIVL_FIN=161;
     // ---- BATCH 7 2026-07-27: SLA/SRA word, SLAL/SRAL long, SLLL/SRLL long ----
@@ -565,13 +530,6 @@ module z8002
     // matched exactly below, not assumed from the mnemonic.
     localparam [7:0]
                      S_SHIFTA=162, S_SHIFTAL=163, S_SHIFTL=164;
-    // ---- BATCH 7 2026-07-27: LDA prd,addr[(rs)] (0x76) -- the opcode actually hit as
-    // S_ILLEGAL (pp_sub2.asm:635, `lda pr11,%8900`, encoding 0x760B). Scope note: only
-    // 0x76 is implemented this batch (both its NIB2==0/!=0 sub-forms) -- its siblings
-    // 0x70-0x75/0x77 (register+register indexed ldb/ld/ldl/lda, a genuinely different
-    // addressing mode) are NOT yet confirmed needed by any reachable code and are left
-    // as documented gaps, matching this project's "close reachable gaps only" scope
-    // (see 2026-07-17b below). Add them if/when co-sim hits one. ----
     localparam [7:0]
                      S_LDA76_FETCH=165, S_LDA76_GO=166;
     // ---- BATCH 8 2026-07-27: remaining ISA gaps found via full-trace audit against the
@@ -589,32 +547,12 @@ module z8002
                      S_LDM_DA_LFETCH2=172, S_LDM_DA_LFETCH3=173,
                      S_LDLSAX_FETCH=174,
                      S_LD71_FETCH=175, S_LD71_RD=176;
-    // ---- Found while re-verifying Batch 7 in co-sim: execution now reaches PAST the
-    // original SRAL/LDA failures and hits two more confirmed gaps, same "direct-address
-    // sibling of an already-implemented register-indirect/indexed form" shape as LDA (0x76)
-    // above -- LDL RRd,addr(rs) indexed (0x54, only its NIB2==0 direct form was in Batch 1)
-    // and LDM addr,rs,n direct-address store (0x5C09, only the register-indirect @rd/@rs
-    // forms were done). Both reuse existing, already-verified tail states unchanged. ----
     localparam [7:0]
                      S_LDLAX_FETCH=167, S_LDM_DA_FETCH2=168, S_LDM_DA_FETCH3=169;
-    // ---- BATCH 10 2026-08-09: direct-address(+index) static-op family remainder,
-    // 0x4C (byte) / 0x4D (word) -- mirrors the register-indirect 0x0C/0x0D family
-    // (Batch 5 Part 2) with EA=fetched-addr[+R[idxr]] instead of EA=R[dst]. Shared
-    // FETCH/FETCHX/RD/WR per width, sub-op selected by `dacop`/`dadop` (kept SEPARATE
-    // from the existing `daop`, which already drives the working CP-DIRECT-FIX-proven
-    // S_DA_*/S_DAX_* CP/TEST/LD-imm/CLR path -- purely additive, zero risk to it). ----
     localparam [7:0]
                      S_DAC_FETCH=177, S_DAC_FETCHX=178, S_DAC_IMM=179,
                      S_DAC_RD=180, S_DAC_RDRO=181, S_DAC_WR=182,
                      S_DAD_FETCH=183, S_DAD_FETCHX=184, S_DAD_RD=185, S_DAD_WR=186;
-    // ---- BATCH 11 2026-08-09: 0x51-0x5F direct-address(+index) family -- PUSHL/POPL
-    // (32-bit mem<->mem pumps against a fetched addr, new), PUSH/POP word (indexed
-    // siblings of the already-implemented direct forms), ADDL/SUBL/MULTL/DIVL/MULT/DIV
-    // vs a fetched address (new FETCH/RD chains feeding the EXISTING, already-verified
-    // S_LALU_GO/S_MULTL_GO/S_DIVL_GO/S_MULT_GO/S_DIV_GO tails unchanged), TESTL addr
-    // (new), LDM addr(rs),n indexed (indexed siblings of the already-implemented direct
-    // forms), and CALL addr(rd) indexed (indexed sibling of the already-implemented
-    // direct form). See the state bodies for per-family shape notes. ----
     localparam [7:0]
                      // Z52/Z56/Z58/Z5A (SUBL/ADDL/MULTL/DIVL rrd|rqd,addr[,(rs)]): shared
                      // 32-bit-operand fetch+read chain, `dwop` selects which existing GO
@@ -646,33 +584,12 @@ module z8002
                      // Z5F10-Z5FF0 (CALL addr(rd) indexed): indexed sibling of the existing
                      // S_CALL_FETCH (0x5F00 exact-match direct), joins S_CALL_PUSH unchanged.
                      S_CALLX_FETCH=214;
-    // ---- BATCH 12 2026-08-09: 0x30-0x37 PC-relative(dsp16)/indexed(idx16) family, the
-    // NEW addressing mode flagged as the strongest next-batch candidate in this file's
-    // own header history (confirmed real usage in both sub ROMs). Only the 7 DIRECT
-    // (dsp16, PC-relative) forms need new states -- every INDEXED (idx16) sub-form is
-    // mathematically identical in shape to the addr(Rx) indexing used everywhere else in
-    // this file (R[idx-reg]+fetched-word) and reuses an EXISTING X_FETCH state verbatim
-    // (S_LDBDAX_FETCH/S_LDAX_FETCH/S_LDBSTAX_FETCH/S_LDSAX_FETCH/S_LDA76_FETCH/
-    // S_LDLAX_FETCH/S_LDLSAX_FETCH), confirmed field-for-field against each one's current
-    // decode arm -- see the decode site comments for the per-opcode mapping. Z36
-    // (BPT/rsvd-EPU) intentionally excluded, see final report. ----
     localparam [7:0]
                      S_Z30_FETCH=215, S_Z31_FETCH=216, S_Z32_FETCH=217, S_Z33_FETCH=218,
                      S_Z34_FETCH=219, S_Z35_FETCH=220, S_Z37_FETCH=221;
-    // ---- BATCH 13 2026-08-09: 0x70/72/73/74/75/77 register+register-indexed family (EA=
-    // R[base]+R[idx], a THIRD addressing-mode category vs the already-implemented direct-
-    // address and addr(Rx)/dsp16(Rx) forms) -- same shape as the ALREADY-implemented 0x71
-    // (S_LD71_FETCH: `ea<=R[src]+R[din[11:8]]`, word2's NIB1 holds the INDEX REGISTER
-    // NUMBER, not a literal). Each new *_FETCH state below is that exact one-line pattern,
-    // joining an EXISTING, already-verified RD/WR tail per data shape (byte load/store,
-    // word store, register-only address-add, long load/store) -- zero new RD/WR states. ----
     localparam [7:0]
                      S_Z70_FETCH=222, S_Z72_FETCH=223, S_Z73_FETCH=224,
                      S_Z74_FETCH=225, S_Z75_FETCH=226, S_Z77_FETCH=227;
-    // ---- BATCH 14 2026-08-09: small mechanical cleanup sweep -- MULTL/DIVL #imm32
-    // (0x18/0x1A NIB2=0), same imm32-fetch shape as S_LALU_IMM_HI/LO, landing in the
-    // EXISTING S_MULTL_GO/S_DIVL_GO. (The 0x11/13/15/17 N0-guard relaxation and the
-    // ZB2/ZB3/0x22-27 additions reuse existing states with no new ones needed.) ----
     localparam [7:0]
                      S_MULTLI_HI=228, S_MULTLI_LO=229, S_DIVLI_HI=230, S_DIVLI_LO=231;
     // BATCH 14: register-count dynamic shift GO states (SDLB/SDAB/SDLW/SDAW/SDLL/SDAL) --
@@ -690,21 +607,8 @@ module z8002
     localparam [7:0]
                      S_RESB2_GO=238, S_RES2_GO=239, S_SETB2_GO=240,
                      S_SET2_GO=241, S_BITB2_GO=242, S_BIT2_GO=243;
-    // ---- BATCH 15 2026-08-09 (final cleanup sweep): SLAB/SRAB rbd,#imm8 (byte
-    // arithmetic shift, S_SHIFTAB -- mirrors S_SHIFTA one level narrower); HALT (S_HALT
-    // -- a genuine, INTENTIONAL non-retiring stop, NOT a decode bug, so `illegal` is
-    // never set for it -- see decode site comment); S_SWALLOW1 -- ONE shared state for
-    // every size=2 (opcode + exactly one operand word, no side effects) "accepted but
-    // functionally unimplemented" instruction in the remaining I/O/EPU/privileged/
-    // block-string bucket (see report for the full list and reasoning: these need either
-    // privileged-mode+trap-vectoring infra or actual I/O-port/block-string hardware this
-    // core doesn't have and Pole Position's ROMs never exercise). size=1 members of that
-    // same bucket need no state at all -- handled inline in S_FETCH0 like any other
-    // single-word op. ----
     localparam [7:0]
                      S_SWALLOW1=244, S_HALT=245, S_SHIFTAB=246;
-    // ---- BATCH 17 2026-08-09: real internal-trap sequence (EPU/TRAP/SYSCALL), modeled
-    // on S_NVI_PC/FCW/VEC/RDFCW/RDPC -- see the `trap_vec` declaration comment above. ----
     localparam [7:0]
                      S_TRAP_PC=247, S_TRAP_FCW=248, S_TRAP_OP=249,
                      S_TRAP_RDFCW=250, S_TRAP_RDPC=251;
@@ -719,10 +623,6 @@ module z8002
     // bodies + iorq/addr/dout/wordacc mux comments for the exact per-signal mapping. ----
     localparam [7:0]
                      S_INB_GO=252, S_IN_GO=253, S_OUTB_GO=254, S_OUT_GO=255;
-    // BATCH 18: `state` widened from 8 to 9 bits -- the 0x3A/3B/B8/BA/BB self-repeating
-    // I/O-block and string-block work still ahead this session needs more than 255
-    // state values. Same "one non-purely-additive line, flagged" precedent as the
-    // earlier 7->8 bit widening (Batch 5 Part 2).
     reg [8:0] state;
     // ---- BATCH 18: LDPS real functional sequence (0x39 @rs / 0x79 addr[(rs)]) -- shared
     // RDFCW/RDPC tail (fcw=mem[ea], pc=mem[ea+2], matches both MAME bodies exactly once
@@ -1169,20 +1069,6 @@ module z8002
     reg [10:0] dab_idx;           // BATCH 8: DAB rom index {DA,H,C,byte}
     reg [8:0]  dab_res;           // BATCH 8: DAB rom result {carry,byte}
     reg [4:0]  cnt;
-    // ================= INCDEC16-2026-09-05 =================================
-    // Was [3:0], so imm4m1 field 0xF ("+16") wrapped to 0 and INC/DEC rd,#16
-    // added nothing. Suite: ZA8/A9/AA/AB_dddd_imm4m1, 128 fails each -> 0.
-    // NOT visually confirmed on hardware; suite evidence only.
-    //
-    // TO RIP OUT: restore the declaration below AND the four zero-extends that
-    // were narrowed with it (they are width-matched to this reg, so all five
-    // must move together or Verilator/Quartus will width-warn):
-    //   reg [3:0]  incn;
-    //   0xAB DEC : incn=din[3:0]+4'd1; ... res16=a16-{12'd0,incn};
-    //   0xAA DECB: incn=din[3:0]+4'd1; ... add8={1'b0,dbyte}-{5'd0,incn};
-    //   0xA9 INC : incn=din[3:0]+4'd1; incw_sum={1'b0,R[din[7:4]]}+{13'd0,incn};
-    //   0xA8 INCB: incn=din[3:0]+4'd1; ... incb_sum={1'b0,dbyte}+{5'd0,incn};
-    // =======================================================================
     reg [4:0]  incn;
     reg        z,s,v,c,h,wb, cbit;
     // BATCH 2 combinational scratch
@@ -1959,16 +1845,12 @@ module z8002
                 else if (din[15:8]==8'h31 && din[7:4]!=4'h0) begin
                     dst<=din[3:0]; daop<=DA_LDR; idxr<=din[7:4]; pc<=pc2; state<=S_LDAX_FETCH;
                 end
-                // ---- Z32: LDRB dsp16,rbs / LDB rd(idx16),rbs -- byte store, src(value)=NIB3
-                // always (unrestricted "ssss", even indexed) ----
                 else if (din[15:8]==8'h32 && din[7:4]==4'h0) begin
                     src<=din[3:0]; pc<=pc2; state<=S_Z32_FETCH;
                 end
                 else if (din[15:8]==8'h32 && din[7:4]!=4'h0) begin
                     src<=din[3:0]; idxr<=din[7:4]; pc<=pc2; state<=S_LDBSTAX_FETCH;
                 end
-                // ---- Z33: LDR dsp16,rs / LD rd(idx16),rs -- word store, src(value)=NIB3
-                // always (unrestricted) ----
                 else if (din[15:8]==8'h33 && din[7:4]==4'h0) begin
                     src<=din[3:0]; daop<=DA_STR; pc<=pc2; state<=S_Z33_FETCH;
                 end
@@ -2254,7 +2136,7 @@ module z8002
                 // ---- PUSHL @Rd,@Rs (0x11) : MAME Z11_ddN0_ssN0 "pushl @rd,@rs" ----
                 // value = long read INDIRECTLY at R[src] (src ptr unmodified); pushed
                 // (pre-decrement by 4) to R[dst]-4.
-                // BATCH 14 2026-08-09: the earlier guard here (`din[3:0]!=0` too, "both
+                // the earlier guard here (`din[3:0]!=0` too, "both
                 // nibbles nonzero") was a DELIBERATE prior-session narrowing to the "real
                 // ROM code never emits that edge" cases (the old "close reachable gaps
                 // only" policy), explicitly flagged as such in this comment before -- but
@@ -2414,13 +2296,6 @@ module z8002
                     dst<=din[7:4]; bmask<=(16'h0001<<din[3:0]); bitop_set<=1'b1;
                     pc<=pc2; state<=S_BITW_RD;
                 end
-                // ==== BATCH 14: RESB/RES/SETB/SET/BITB/BIT rd,rs (0x22-0x27, NIB2=0) --
-                // register-to-register form with a DYNAMIC bit index (src=NIB3 of word1,
-                // masked to 0-7/0-15; the actual bit position is R[src]'s LOW bits, not a
-                // literal). Previously skipped, all six, citing "only ~1 real occurrence" --
-                // implemented now for the "close the whole decode" mandate. dst is word2's
-                // NIB1 (fetched via the single-cycle S_*2_GO states below, register-only,
-                // no memory access). ====
                 else if (din[15:8]==8'h22 && din[7:4]==4'h0) begin
                     src<=din[3:0]; pc<=pc2; state<=S_RESB2_GO;
                 end
@@ -3485,25 +3360,16 @@ module z8002
                 ea<=din; pc<=pc+16'd2;
                 case (daop)
                     DA_LDR, DA_TST: state<=S_DA_RD;
-                    // CP-DIRECT-FIX-2026-08-09: DA_CPI joins DA_STI here -- both need
-                    // the imm16 word next. Mirrors S_DAX_FETCH's `default` routing.
                     DA_STI, DA_CPI: state<=S_DA_IMM;
                     default:        state<=S_DA_WR;   // DA_STR, DA_CLR
                 endcase
             end
-            // CP-DIRECT-FIX-2026-08-09: STI writes; CPI reads mem next so S_DA_RD can
-            // do the compare (that DA_CPI branch already exists, added by BATCH 8).
-            // Mirrors S_DAX_IMM exactly.
             S_DA_IMM: begin
                 operand<=din; pc<=pc+16'd2;
                 state<=(daop==DA_CPI) ? S_DA_RD : S_DA_WR;
             end
             S_DA_RD:  begin
                 if (daop==DA_LDR) begin rwb0_we=1'b1; rwb0_idx=dst; rwb0_val=din; end
-                // BATCH 8: CP mem,#imm (DA_CPI; indexed AND, since
-                // CP-DIRECT-FIX-2026-08-09, direct) -- same dif17/CZSV formula as
-                // the existing S_ALU SUB/CP case, `din`=mem value just read, `operand`=imm16
-                // already staged by S_DAX_IMM. Discard-only compare, no register write-back.
                 else if (daop==DA_CPI) begin
                     dif17={1'b0,din}-{1'b0,operand};
                     c=dif17[16]; z=(dif17[15:0]==0); s=dif17[15];
@@ -3675,11 +3541,6 @@ module z8002
                 pc<=pc+16'd2; retire<=1'b1; state<=S_FETCH0;
             end
 
-            // ==== BATCH 7 2026-07-27: SLAL/SRAL rrd,#imm (long, flags CZSV) ================
-            // 32-bit sibling of S_SHIFTA above, register-pair access matches the existing
-            // S_LALU_GO convention ({dst[3:1],1'b0} forces the even base register). This is
-            // the opcode that was actually hitting S_ILLEGAL (pp_sub1.asm:83, `sral rr2,#4`,
-            // encoding 0xB32D). Same right-shift-never-sets-V rule as S_SHIFTA. ----
             S_SHIFTAL: begin
                 a32 = {R[{dst[3:1],1'b0}], R[{dst[3:1],1'b0}+4'd1]};
                 scnt = din[15] ? (16'h0000 - din) : din; cnt=scnt[4:0];
@@ -3699,8 +3560,6 @@ module z8002
                 pc<=pc+16'd2; retire<=1'b1; state<=S_FETCH0;
             end
 
-            // ==== BATCH 7 2026-07-27: SLLL/SRLL rrd,#imm (long, flags CZS, no V) ===========
-            // 32-bit sibling of the existing word S_SHIFT (logical, zero-fill right shift). ---
             S_SHIFTL: begin
                 a32 = {R[{dst[3:1],1'b0}], R[{dst[3:1],1'b0}+4'd1]};
                 scnt = din[15] ? (16'h0000 - din) : din; cnt=scnt[4:0];
@@ -3740,14 +3599,10 @@ module z8002
             // ---- Z30 direct: LDB rbd,dsp16 -- joins the EXISTING S_LDBDA_RD tail (byte
             // load, word-aligned read, ea[0] lane -- dst already latched at decode). ----
             S_Z30_FETCH: begin ea<=pc+16'd2+din; pc<=pc+16'd2; state<=S_LDBDA_RD; end
-            // ---- Z31 direct: LDR rd,dsp16 -- joins the EXISTING S_DA_RD tail (word load,
-            // daop=DA_LDR already latched at decode). ----
             S_Z31_FETCH: begin ea<=pc+16'd2+din; pc<=pc+16'd2; state<=S_DA_RD; end
             // ---- Z32 direct: LDRB dsp16,rbs -- joins the EXISTING S_LDBSTA_RD tail (byte
             // store, word-aligned RMW, src already latched at decode). ----
             S_Z32_FETCH: begin ea<=pc+16'd2+din; pc<=pc+16'd2; state<=S_LDBSTA_RD; end
-            // ---- Z33 direct: LDR dsp16,rs -- joins the EXISTING S_DA_WR tail (word store,
-            // daop=DA_STR / src already latched at decode). ----
             S_Z33_FETCH: begin ea<=pc+16'd2+din; pc<=pc+16'd2; state<=S_DA_WR; end
             // ---- Z34 direct: LDAR prd,dsp16 -- register-ONLY (no memory read of the
             // target at all, matches MAME's addr_to_reg): single-cycle, computes the PC-
@@ -4232,11 +4087,6 @@ module z8002
             //      cleared, dest UNCHANGED) replicated exactly. ----
             S_DIV_IMM: begin operand<=din; pc<=pc+16'd2; state<=S_DIV_GO; end
             S_DIV_RD:  begin operand<=din; state<=S_DIV_GO; end              // addr=R[src]&~1
-            // AREA FIX 2026-07-19: was a single-cycle `div_q = dvd/dvs; div_r = dvd%dvs;`
-            // which inferred two full combinational dividers. Now loads the shared
-            // sequential divider and hands off to S_DIV_BUSY -> S_DIV_FIN. The
-            // divide-by-zero early-out keeps its original single-cycle behaviour
-            // (dest UNCHANGED, Z+V set, C+S cleared) and never enters the divider.
             S_DIV_GO: begin
                 if (operand==16'h0000) begin
                     c=1'b0; z=1'b1; s=1'b0; v=1'b1;   // dest UNCHANGED -- no register write
@@ -4275,8 +4125,6 @@ module z8002
                 if (dv_cnt == 7'd63) state <= dv_long ? S_DIVL_FIN : S_DIV_FIN;
             end
 
-            // ---- DIV writeback: sign-restore, then the ORIGINAL overflow/flag logic
-            //      verbatim (quotient -> lo word, remainder -> hi word of RL(dst)). ----
             S_DIV_FIN: begin
                 dv_q_signed = dv_qneg ? -$signed(dv_quo) : $signed(dv_quo);
                 dv_r_signed = dv_rneg ? -$signed(dv_rem) : $signed(dv_rem);
@@ -4331,9 +4179,6 @@ module z8002
             // BATCH 14: DIVL rqd,#imm32 -- imm32 fetch, lands in the EXISTING S_DIVL_GO.
             S_DIVLI_HI: begin operand<=din;  pc<=pc+16'd2; state<=S_DIVLI_LO; end
             S_DIVLI_LO: begin operand2<=din; pc<=pc+16'd2; state<=S_DIVL_GO; end
-            // AREA FIX 2026-07-19: same treatment as DIV -- was a single-cycle 64-bit
-            // `/` + `%` pair (the Div1/Mod1 instances, ~4.2k ALMs per CPU on their own).
-            // Loads the SAME shared divider, distinguished only by dv_long.
             S_DIVL_GO: begin
                 qbase = {dst[3:2],2'b00};
                 if (operand==16'h0000 && operand2==16'h0000) begin
@@ -4354,8 +4199,6 @@ module z8002
                 end
             end
 
-            // ---- DIVL writeback: sign-restore, then the ORIGINAL overflow/flag logic
-            //      verbatim (quotient -> low half, remainder -> high half, MSW-first). ----
             S_DIVL_FIN: begin
                 qbase = {dst[3:2],2'b00};
                 dv_q_signed = dv_qneg ? -$signed(dv_quo) : $signed(dv_quo);
@@ -4842,8 +4685,6 @@ module z8002
             S_LDAX_FETCH:  begin ea<=din+R[idxr]; pc<=pc+16'd2; state<=S_DA_RD; end
             S_LDSAX_FETCH: begin ea<=din+R[idxr]; pc<=pc+16'd2; state<=S_DA_WR; end
 
-            // ==== BATCH 6: register-indirect INCB/INC/DECB/DEC @rd (0x28-0x2B) ==========
-            // EA=R[dst] directly -- no address word to fetch at all.
             S_INCBI_RD: begin // addr=R[dst]&16'hFFFE: byte RMW, lane=R[dst][0]
                 i4p1 = {1'b0,mcnt} + 5'd1;
                 dbyte = R[dst][0] ? din[7:0] : din[15:8];

@@ -92,10 +92,6 @@ module namco_51xx
     // single event. Gating with `ena` reproduces that: o_wr_w is set on one ena
     // tick and cleared on the next, so `o_wr_w & ena` is true for exactly one
     // fabric clock per outO. Z80 writes on every other clock now survive.
-    //
-    // Original (2026-08-09 form) kept for revert:
-    //   if (wr_en)        mailbox <= wr_data;
-    //   else if (o_wr_w)  mailbox <= o_out_w;
     always @(posedge clk) begin
         if (!reset_n) begin
             mailbox <= 8'h00;

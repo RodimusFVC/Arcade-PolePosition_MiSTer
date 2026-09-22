@@ -111,13 +111,6 @@ module pp_engine_snd
         else if (tick && sample_en)       position <= position + {8'd0, step};
     end
 
-    // ROM READ LATENCY — deliberately safe. Arcade-PolePosition.sv registers this
-    // read (`engine_data <= engine_rom[engine_addr]`) to infer BRAM, exactly like
-    // the scan ports that broke pp_road_gen and pp_sprite_gen (SCAN-LATENCY-FIX-
-    // 2026-08-06). It is harmless here because rom_addr only changes on the 48 kHz
-    // tick and is therefore stable for 1024 clocks — the same reason pp_tile_layer
-    // is immune. Do NOT drive rom_addr from a fast per-clock FSM without adding a
-    // wait state.
     assign rom_addr = {sample_msb[5:3], position[22:12]};   // {slot, index}
 
     // ---- volume_table[8], polepos_a.cpp:27-37, as Q8 -----------------------

@@ -115,20 +115,8 @@ module namco_06xx
         end else if (ctrl_apply) begin
             // ctrl_w_sync equivalent (deferred write commits now)
             ctrl    <= ctrl_wdata_d;
-            // CTRL-REARM-FIX-2026-08-10: REVERTED SAME DAY -- measurably WORSE.
-            // The change made two things match namco06.cpp:186-223 more closely:
-            //   (a) div_cnt <= ((1<<(ctrl_wdata_d[7:5]-1))-1), i.e. preloaded to the
-            //       limit so the first toggle lands on the NEXT base tick,
-            //       matching MAME's adjust(delay_to_next_clock_edge, 0, period),
-            //       instead of waiting a full period;
-            //   (b) timer_state reset moved into the disabled branch ONLY, since
-            //       MAME carries the parity over on an enabled ctrl write.
-            // Both are arguably more faithful, but measured on the 51xx reply
-            // corruption they made it WORSE, per 100 frames:
-            //     $810C wrong 10.7 -> 14.4    $810D wrong 10.5 -> 16.8
-            // Restored to the 2026-08-09 behaviour, which is the better baseline.
-            // If revisiting, bisect (a) and (b) separately -- they were never
-            // measured independently.
+            // div_cnt/timer_state are deliberately NOT preloaded from ctrl here:
+            // the closer match to namco06.cpp:186-223 measured worse on the 51xx reply.
             div_cnt <= 7'd0;
             timer_state <= 1'b0;
             if (ctrl_wdata_d[7:5] == 3'b000) begin
@@ -200,26 +188,6 @@ module namco_06xx
     wire win_close = enabled && base_ce && !pause && (div_cnt == div_limit) &&  timer_state;
     wire win_open  = enabled && base_ce && !pause && (div_cnt == div_limit) && ~timer_state;
 
-    // N06-DATAHOLD-2026-08-11 / HOLDMODE-0-2026-09-20 ----------------------
-    // HOLD_MODE was 1 (capture at select-window close). MEASURED 2026-09-20:
-    // that fixed instant can land BETWEEN the 51xx's two nibble outO's, so the
-    // Z80 latches a half-written byte. Intermediates F4 / 7F / 04 / F0 appeared
-    // in 13% of 51xx reads, and $810C is the BCD CREDIT COUNT
-    // ($01E7 -> $4007 -> sub1 %800E -> %81AA), so one non-zero sample = a
-    // phantom credit = sub1 MODE=2 = stuck on PUSH START BUTTON forever.
-    //
-    // With HOLD_MODE=0 (free-running live read, which is what namco06.cpp
-    // data_r() does) the 51xx returns exactly 4 distinct values in equal thirds
-    // (74 / FF / {00,FB}) and the 53xx exactly 3 -- 0% differ from the live
-    // mailbox. Attract mode then runs. Per-chip hold registers were also tried
-    // and do NOT help: the tearing is within a single chip's own byte.
-    //
-    // Original below, restore with HOLD_MODE = 1:
-    //   reg [7:0] data_r_hold;
-    //   always @(posedge clk) begin
-    //       if (reset)                                  data_r_hold <= 8'hFF;
-    //       else if (HOLD_MODE == 1 ? win_close : win_open) data_r_hold <= data_r_val;
-    //   end
     reg [7:0] data_r_hold;
     always @(posedge clk) begin
         if (reset)                                  data_r_hold <= 8'hFF;
@@ -228,8 +196,6 @@ module namco_06xx
 
     wire [7:0] data_r_sel = (HOLD_MODE == 0) ? data_r_val : data_r_hold;
 
-    // N06-DATAHOLD-2026-08-11: original below, restore with HOLD_MODE = 0
-    // assign cpu_din = ctrl_rd ? ctrl : (ctrl[4] ? data_r_val : 8'h00);
     assign cpu_din = ctrl_rd ? ctrl : (ctrl[4] ? data_r_sel : 8'h00);
 
     // ---- data_w: deferred broadcast to selected chips in write mode -------

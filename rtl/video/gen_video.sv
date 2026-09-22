@@ -125,8 +125,6 @@ module gen_video (
             //else                          csync <= hsync0;
             //end if;
             vsync_base <= 250 + int'(v_offset);
-            //if    vcntReg = (vsync_base+10) mod 264 then vsync <= '1';
-            //elsif vcntReg = (vsync_base+17) mod 264 then vsync <= '0';
             if ((vcnt32 == (vsync_base+10)) && (int'(v_offset) < (263-250-10))) begin
                 vsync <= 1'b1;
             end else if ((vcnt32 == (vsync_base+10-263)) && (int'(v_offset) >= (263-250-10))) begin
@@ -142,7 +140,7 @@ module gen_video (
             // was +1; now +3 = 2 px further left, HW-confirmed V already correct at +0
             // = down 2). screen-x grows with hcnt, screen-y with vcnt.
             //
-            // WIDTH fix (2026-07-28, HW-observed "left side is fat"): this whole
+            // WIDTH fix (HW-observed "left side is fat"): this whole
             // 448/192 window was inherited unmodified from Xevious (288px: 32 tiles
             // centre + 2 extra tile-columns shown on EACH side) -- flagged but never
             // resolved in Claude/polepos_video_mapping_2026-07-13.md:302-306, since PP's

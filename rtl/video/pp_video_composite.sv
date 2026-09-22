@@ -54,7 +54,7 @@ module pp_video_composite
     output wire [3:0]  g,
     output wire [3:0]  b
 );
-    // REVERTED-2026-07-28: a same-session fix attempted here (subtracting a
+    // NOTE: the h-offset belongs in the layer modules, not here (subtracting a
     // constant 128 from hpos) was based on a wrong premise -- it assumed the
     // active display width was the full raw hcnt range (128-511, 384px), but
     // gen_video.vhd's own hblank compares (hcnt=475 assert / hcnt=187
@@ -87,8 +87,6 @@ module pp_video_composite
             .gfx_addr(view_gfx_addr), .gfx_data(view_gfx_data),
             .color(v_color), .pixel(v_pixel), .bank128v(v_bunused));
     wire [7:0] vr, vg, vb;
-    // VIEWPROM-ALIAS-FIX-2026-08-16: was .prom_addr(prom_addr[10:0]) -- dropping
-    // bit 11 aliased road(0x800)/sprite(0xC00) onto view's R/G/B/view tables.
     pp_palette_view u_pal_v (.clk(clk), .prom_wr(prom_wr), .prom_addr(prom_addr),
             .prom_data(prom_data), .color(v_color), .pixel(v_pixel), .r(vr), .g(vg), .b(vb));
 
@@ -110,8 +108,6 @@ module pp_video_composite
     pp_palette_road u_pal_r (.clk(clk), .prom_wr(prom_wr), .prom_addr(prom_addr),
             .prom_data(prom_data), .road_index(road_idx), .r(rr), .g(rg), .b(rb));
 
-    // ======================= SPRITE ========================================
-    // RESTORED-2026-07-28: same reason as road above -- also an unverified draft.
     wire [3:0] s_pen; wire [5:0] s_color; wire s_bank, s_active;
     pp_sprite_gen u_spr (.clk(clk), .ce(ce), .hpos(hpos), .vpos(vpos),
             .scan_sprite_addr(sprite_scan_addr), .scan_sprite_dout(sprite_scan_dout),
@@ -120,21 +116,6 @@ module pp_video_composite
             .prom_wr(prom_wr), .prom_addr(prom_addr), .prom_data(prom_data),
             .sprite_pen(s_pen), .sprite_color(s_color), .sprite_bank(s_bank),
             .sprite_active(s_active));
-    // ---- DIAG-REVERT-2026-08-16: PALETTE SWATCH OVERLAY --------------------
-    // 8 rows x 16 cols of 16x16px cells = indirect 0x00..0x7F, i.e. EVERY
-    // palette window in one screenshot:
-    //   row0 0x00-0x0F view/bg   | row1 0x10-0x1F **SPRITE bank0**
-    //   row2 0x20-0x2F alpha b0  | row3 0x30-0x3F (unused by any layer)
-    //   row4 0x40-0x4F road      | row5 0x50-0x5F **SPRITE bank1**
-    //   row6 0x60-0x6F alpha b1  | row7 0x70-0x7F (unused by any layer)
-    // Rows 4 and 2 are the KNOWN-GOOD reference (road + alpha render correctly
-    // on screen), so they calibrate the shot: if row4 looks like the road's
-    // palette but rows 1/5 look wrong, the fault is in the sprite windows.
-    // Cell 0 = LEFTMOST (swatch-overlay convention). diag_swatch=0 = pass-through.
-    // Cells are 8px wide x 16px tall => the whole grid is 128x128 px. It must
-    // fit BOTH windows: real HW active is hcnt 187..474, and the Verilator
-    // harness only presents hpos 256..511. X0=280 sits inside both. (First cut
-    // used 16px cells from X0=192 and lost 4 columns off the left in sim.)
     localparam [8:0] SW_X0 = 9'd280;
     localparam [8:0] SW_Y0 = 9'd56;
     wire [8:0] sw_dx = hpos - SW_X0;
@@ -154,15 +135,6 @@ module pp_video_composite
     wire [7:0]  base_r = view_region ? vr : rr;
     wire [7:0]  base_g = view_region ? vg : rg;
     wire [7:0]  base_b = view_region ? vb : rb;
-    // DIAG-REVERT-2026-08-16: originals below, uncomment to restore
-    // wire [7:0]  mid_r  = s_active ? sr : base_r;   // sprite over view/road
-    // wire [7:0]  mid_g  = s_active ? sg : base_g;
-    // wire [7:0]  mid_b  = s_active ? sb : base_b;
-    // wire [7:0]  fin_r  = a_transp ? mid_r : ar;    // alpha on top
-    // wire [7:0]  fin_g  = a_transp ? mid_g : ag;
-    // wire [7:0]  fin_b  = a_transp ? mid_b : ab;
-    // DIAG: sw_on forces the sprite palette output to win, and holds the alpha
-    // layer off, so the swatch reads clean with no HUD text over it.
     wire [7:0]  mid_r  = (s_active | sw_on) ? sr : base_r;
     wire [7:0]  mid_g  = (s_active | sw_on) ? sg : base_g;
     wire [7:0]  mid_b  = (s_active | sw_on) ? sb : base_b;

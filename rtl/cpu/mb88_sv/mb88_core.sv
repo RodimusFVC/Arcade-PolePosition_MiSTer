@@ -11,7 +11,7 @@
 //    Flags: st(skip-branch), zf(1=zero), cf(carry), vf(timer), sf(serial), if(irq).
 //    Reset: all 0, st=1.  st gates ONLY jmp/call/jpl/jpa (MB88 conditional model).
 //
-//  STATUS (2026-07-18): COMPLETE vs MAME mb88xx.cpp — opcode AND non-opcode.
+//  COMPLETE vs MAME mb88xx.cpp — opcode AND non-opcode.
 //  ----------------------------------------------------------------------------
 //  OPCODES: all 256 bytes, verified byte-for-byte vs mb88xx.cpp execute_run()
 //    (0x00-2f individual; 0x30-3f sbit/rbit/tbit/rti/jpa/en/dis; 0x40-7f setD/
@@ -117,8 +117,6 @@ module mb88_core
     wire [3:0] mem = ram[ea];
     assign prog_addr = {PA, PC};                 // GETPC
     wire [7:0] op = prog_data;
-    // MCU-TIMERVF-FIX-2026-07-11: "timer overflows THIS clock" (mirrors the timer block's vf<=1);
-    // lets tstv skip its vf-clear on a coincident overflow so the poll-based ape timer doesn't lose ticks.
     wire timer_ovf_now = ena_timer && pio[7] && (TL == 4'hF) && (TH == 4'hF);
 
     // INCPC (PC 6-bit rolls into PA at 0x40)
@@ -183,11 +181,9 @@ module mb88_core
           // BEFORE the instruction block so a coincident tsts (clears sf/SBcount) overrides. ----
           if (ce) begin
             if (serial_running) begin
-              // SERIALRATE-2026-09-19: MAME SERIAL_PRESCALE=6 divides the MB88 PIN
+              // MAME SERIAL_PRESCALE=6 divides the MB88 PIN
               // clock; `ce` is already pin/6 (MCU_CEN_DIV), so the /6 must not be
               // applied twice. Serial shifts once per machine cycle.
-              // SERIALRATE-REVERT-2026-09-19: original below, uncomment to restore
-              // if (serial_ps == 3'd5) begin
               if (serial_ps == 3'd0) begin
                 serial_ps <= 3'd0;
                 SBcount   <= SBcount + 11'd1;

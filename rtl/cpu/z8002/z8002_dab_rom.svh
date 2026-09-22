@@ -1,4 +1,4 @@
-    // BATCH 8 2026-07-27: mechanically extracted (Python regex, not hand-typed) from
+    // mechanically extracted (Python regex, not hand-typed) from
     // Useful Stuff/mame/z8000/z8000dab.h's Z8000_dab[0x800] table. Do not hand-edit --
     // regenerate from the MAME header if this ever needs to change.
     initial begin

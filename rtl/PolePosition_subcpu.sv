@@ -69,13 +69,6 @@
 module PolePosition_subcpu
 (
     input  wire        clk,
-    // PAUSE-GATE-2026-08-05: freezes BOTH Z8002 sub-CPUs. Previously unpaused --
-    // pausing only the main Z80 left the two subs running, so the game did not
-    // actually stop. Gates cen_sub1/cen_sub2 ONLY, deliberately NOT `div`
-    // itself: div also drives the shared-VRAM port-A ownership rotation and the
-    // scanout read ports, so freezing it would freeze the display. The video
-    // counters must keep running while paused (see the vault note's table --
-    // video counters are the one block you leave alone).
     input  wire        pause,
     input  wire        reset,          // active-high subsystem reset
 
@@ -91,10 +84,6 @@ module PolePosition_subcpu
     input  wire        vram_rd,
     output wire  [7:0] vram_din,
 
-    // ---- scanout (port B): 4 INDEPENDENT word-wide read-only ports, one per
-    //      buffer, so the video pipeline can read all four concurrently every
-    //      cycle. Replaces the old single muxed scan_buf_sel/scan_addr/scan_dout
-    //      (Part-2 4-port scanout fix, 2026-07-13). Addr widths = buffer depths.
     input  wire [10:0] scan_sprite_addr,  // 0x800 words (11-bit)
     output wire [15:0] scan_sprite_dout,
     input  wire  [9:0] scan_road_addr,    // 0x400 words (10-bit)
@@ -248,43 +237,6 @@ module PolePosition_subcpu
     wire [10:0] z80_idx11 = vram_addr[10:0];
     wire [9:0]  z80_idx10 = vram_addr[9:0];
 
-    //========================================================================
-    //  MEMORY (BRAM) — 2026-07-14 synthesis rewrite (Quartus Error 276003 fix)
-    //
-    //  The sub ROMs and shared VRAM were behavioral byte-array pairs with
-    //  ASYNC, multi-port (up to 4) combinational reads — a Verilator-friendly
-    //  model that Quartus CANNOT infer as M10K, so ~350 Kbit tried to map to
-    //  flip-flops and overflowed the 5CSEBA6 (Error 276003). See
-    //  [[Sim-model async-read RAM does not infer BRAM]].
-    //
-    //  Rewritten to inferred, REGISTERED-read, <=2-port BRAM using an SV
-    //  template that BOTH Verilator and Quartus M10K accept (no VHDL
-    //  altsyncram, so verilator_subcpu still builds). Arrays stay hi/lo
-    //  byte-split — one full-width write per array => reliable inference,
-    //  no byte-enable, and the Z80's low-byte-only write is just a lo-array
-    //  write with the hi array untouched.
-    //
-    //  PORT BUDGET — how 4 read consumers fit in 2 BRAM ports:
-    //    * Port A = the CPU side (z80 + sub1 + sub2). The three masters are
-    //      time-staggered by the /16 CE divider (sub1 CE=div5, sub2 CE=div10,
-    //      z80 CE~div0) and each HOLDS its bus stable across its whole ~16-clk
-    //      window, so they are TIME-DIVISION muxed onto ONE port by `div` slot
-    //      (z80: div 0..4, sub1: div 5..9, sub2: div 10..15). Each master's
-    //      registered read is latched into a per-master HOLD at the trailing
-    //      slot edge; the hold is stable at that master's NEXT CE. That
-    //      one-CE-period latency is EXACTLY the z8002 contract (addr presented
-    //      at CE N-1, din consumed at CE N — wait_n tied high => no waits),
-    //      and the Z80's multi-T-state read has even more slack.
-    //    * Port B = scanout (registered read). pp_tile_layer consumes the word
-    //      at intra-tile phase p>=2 and scan_addr is constant across the whole
-    //      8-pixel span, so the +1-clk BRAM latency is invisible (verified vs
-    //      pp_tile_layer.sv fetch timing).
-    //
-    //  NOTE: a naive priority mux (z80>sub1>sub2) does NOT work for READS —
-    //  sub1_mreq/sub2_mreq are asserted almost every cycle (mreq=state!=ILLEGAL)
-    //  so priority would permanently starve sub2 (it would read sub1's data).
-    //  Time-division slotting is required.
-    //========================================================================
 
     //------------------------------------------------------------------------
     //  Port-A time-division owner (matches cen_sub1=div5 / cen_sub2=div10).
@@ -306,9 +258,7 @@ module PolePosition_subcpu
     reg [7:0] rom2_hi [0:16383];
     reg [7:0] rom2_lo [0:16383];
 
-    // PP2-EXPAND-2026-09-21: both windows are now MAME's declared 0x8000 sub
-    // region (PP1 fills 0x4000 and the MRA zero-pads the rest). Must match the
-    // SUB_WINDOW pad in verilator/survey/mra_emit.py and the sim loaders.
+    // MAME's declared 0x8000 sub regions; must match SUB_WINDOW in mra_emit.py.
     localparam [24:0] SUB1_BASE = 25'h3000,  SUB1_LAST = 25'h0AFFF;
     localparam [24:0] SUB2_BASE = 25'h0B000, SUB2_LAST = 25'h12FFF;
 
@@ -605,8 +555,7 @@ module PolePosition_subcpu
     //  registered fetch (dedicated Port-B, no slot). Unmapped => hold defaults
     //  (16'hFFFF / 8'hFF) preserved inside the *_vram_qa muxes above.
     //------------------------------------------------------------------------
-    // IC25 (PP2 only) shadows the ROM for reads of 0x4000-0x5FFF.
-    // sub1_addr[15:13]==010 is that window; ~sub1_we keeps writes off it.
+    // IC25 (PP2 only) shadows the ROM for reads of sub1 0x4000-0x5FFF.
     wire        sub1_ic25_sel = ic25_en & (sub1_addr[15:13] == 3'b010) & ~sub1_we;
     wire [15:0] sub1_ic25_rd;
 

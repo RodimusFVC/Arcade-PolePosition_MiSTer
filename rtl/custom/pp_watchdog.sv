@@ -54,13 +54,6 @@ module pp_watchdog #(
     input  wire        wdog_en,     // 1 = watchdog live, 0 = permanently defeated
     input  wire  [8:0] vpos,        // = vcnt from gen_video.vhd (0..263)
     input  wire        kick,        // 1-clk strobe: Z80 wrote $A100 (PolePosition_CPU.sv watchdog_wr)
-    // PAUSE-GATE-2026-08-05: the CPU this supervises is frozen while paused and
-    // therefore cannot kick $A100. Without this the counter keeps running on
-    // vblanks (pause does NOT stop the video counters) and reboots the board on
-    // resume. Canonical: vault note "Pause must gate every clock domain",
-    // second class. NOTE it CLEARS rather than freezes -- freezing leaves a
-    // nearly-expired count that can trip moments after resume, before the
-    // game's next kick; clearing guarantees a full fresh window.
     input  wire        pause,
     output reg         wdog_reset   // active-high PULSE, see header
 );

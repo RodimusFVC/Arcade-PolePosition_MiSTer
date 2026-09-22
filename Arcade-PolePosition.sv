@@ -31,12 +31,8 @@ assign {SDRAM_DQ, SDRAM_A, SDRAM_BA, SDRAM_CLK, SDRAM_CKE, SDRAM_DQML, SDRAM_DQM
 assign VGA_F1    = 0;
 assign VGA_SCALER= 0;
 assign USER_OUT  = '1;
-// ILLEGAL-SCREAM-2026-08-09: LED_USER now also lights, and STAYS lit, if either
-// Z8002 sub hits an unimplemented opcode. z8002.sv's S_ILLEGAL is a terminal
-// state with mreq deasserted -- the sub stops dead and silently, and the only
-// visible symptom is frozen road/sprite/view buffers, which reads as a video
-// bug. That cost weeks on the 4D01 (CP addr,#imm16) gap. If this LED is on,
-// stop debugging the picture and go find the missing opcode.
+// LED_USER also latches on a Z8002 illegal opcode: the sub stops dead and
+// silently, which otherwise reads as frozen road/sprite/view buffers.
 wire sub_illegal;
 assign LED_USER  = rom_download | sub_illegal;
 assign LED_DISK  = 0;
@@ -85,9 +81,6 @@ localparam CONF_STR = {
 	"-;",
 	"O2,Watchdog,On,Off;",
 	"O6,Service Mode,Off,On;",
-	// DIAG-REVERT-2026-08-16: palette-swatch readout. 8x16 grid of RGB-PROM
-	// indirect 0x00-0x7F. Rows 1/5 are the sprite windows (0x10/0x50) that no
-	// working layer ever reads; rows 2/4 (alpha/road) are the known-good ref.
 	"O7,Palette Swatch,Off,On;",
 	"R0,Reset;",
 	// 2026-08-05: 8-slot list, names + physical order copied from the MRA
@@ -95,7 +88,7 @@ localparam CONF_STR = {
 	// slots with Pause on joy[9], the MRA has 8 with Pause on joy[11]/L).
 	// Accelerate/Brake are ANALOG on the real cabinet -- digital placeholders
 	// for now (also on the D-pad); move to L2/R2 when analog input is wired.
-	// CONTROLS-2026-08-09: slot 4 was "Not Used" here and "-" in the MRA -- the two
+	// slot 4 was "Not Used" here and "-" in the MRA -- the two
 	// disagreed despite the 08-05 sync note above, and an empty slot is a mapping
 	// hazard (a placeholder that the mapper treats as absent shifts every later
 	// entry down one physical button, which is what put Coin on Y instead of
@@ -144,10 +137,6 @@ pll pll
 	.refclk(CLK_50M),
 	.rst(0),
 	.outclk_0(clk_sys),
-	//.outclk_1(clk_48) removed — PLL is single-output (49.152 MHz); clk_48 tied to clk_sys below
-	//.outclk_2(clk_12),
-	//.outclk_3(clk_24),
-	//.outclk_4(clk_36),
 	.locked(pll_locked)
 );
 
@@ -264,7 +253,7 @@ always @(posedge clk_sys) begin
 	m_gear_btn_d <= m_gear_btn;
 	if (m_gear_btn & ~m_gear_btn_d) m_gear1 <= ~m_gear1;   // flip on press (rising edge)
 end
-// CONTROLS-2026-08-09: joystick_0[7] was NOT USED. It is now Service Mode (MRA /
+// joystick_0[7] was NOT USED. It is now Service Mode (MRA /
 // CONF_STR slot 4, physical Y) = MAME IN0 bit 7, PORT_SERVICE -- the cabinet's
 // self-test toggle. On the real machine this is a SWITCH, so the game samples it
 // continuously: HOLD the button to stay in test mode. OR'd with the existing OSD
@@ -278,11 +267,6 @@ wire m_start1 = joystick_0[9]  | key_start1;
 wire m_start2 = joystick_0[10] | joystick_1[9] | key_start2;
 wire m_pause  = joystick_0[11];
 
-// XEVIOUS-STRIP-2026-08-06: m_right2/m_left2/m_down2/m_up2/m_gear2 removed.
-// Their only consumer was the poleposition.vhd port list, and those ports were
-// themselves dead (declared, never referenced in the architecture). Pole Position
-// is a single-seat cabinet: one steering wheel, one pedal pair, one gear shifter.
-// Coin 2 and Start 2 are real and stay.
 wire m_coin2  = joystick_1[8]  | key_coin2;
 // The joystick_1 copies of m_start1/m_start2/m_pause that used to sit here were
 // duplicate declarations of the joystick_0 ones above (Quartus error 10149).
@@ -321,34 +305,6 @@ wire flip = 0;
 
 screen_rotate screen_rotate (.*);
 
-// XEVIOUS-STRIP-2026-08-06: width parameter 288 -> 256. 288 was Xevious's active
-// width; Pole Position's is 256 (the 2026-07-28 WIDTH trim in gen_video.sv). This
-// parameter only sizes the scandoubler's line buffer, so the oversized value was
-// harmless — it just reserved a line buffer a tile-column wider than any line the
-// core can produce.
-// VIDSHIFT-2026-08-16: move the WHOLE picture one pixel RIGHT.
-// Measured on the square-grid test pattern: the right edge carried one column
-// too many, the left edge one too few.
-//
-// Same family as Common-Pitfalls/"Pixel pipeline needs matched sync delay"
-// (content vs sync latency mismatch), but the opposite correction: that note
-// fixes content arriving LATE by delaying the syncs. Here the content is one
-// pixel EARLY relative to the window, so the PIXELS get the stage instead.
-//
-// ⛔ Do NOT instead nudge gen_video.sv's hblank compare terms. That was tried
-// (40 -> 39 on BOTH compares) and BROKE OUTPUT ENTIRELY -- see the comment block
-// at gen_video.sv:176-183. This approach leaves core timing completely untouched:
-// hblank/vblank/hs/vs still go to arcade_video RAW, and the core's own logic
-// (watchdog, 51xx vblank tick, pause) is not touched at all.
-//
-// Delay the PIXELS, not the syncs. arcade_video starts capturing the line when
-// HBlank deasserts; if the RGB on the bus at that instant is the PREVIOUS pixel,
-// source pixel 0 lands in display column 1 -- the picture moves RIGHT, the left
-// edge gains a column and the right edge loses one. Delaying the SYNCS instead
-// opens the window later and moves the picture LEFT, i.e. the wrong way here.
-//
-// `rgb_out` comes from rtl/mister_custom/pause.v:98 (the dim-video helper); it is
-// tapped here rather than modified there, since that file is shared MiSTer glue.
 localparam [1:0] VID_H_DELAY = 2'd1;   // pixels to shift RIGHT; 0 = disabled
 reg [11:0] rgb_d1 = 12'd0, rgb_d2 = 12'd0, rgb_d3 = 12'd0;
 always @(posedge clk_sys) if (ce_pix) begin
@@ -390,10 +346,8 @@ end
 
 wire rom_download = ioctl_download & !ioctl_index;
 
-// MRA mod byte -- ioctl INDEX 7, one byte at offset 0. Index 1 is the fleet
-// convention for this but is already the graphics stream here.
-//   bit0 = enable the PP2 IC25 protection custom (machine polepos2 only).
-// Absent in an MRA => stays 0 => PP1 and polepos2b behave exactly as before.
+// MRA mod byte, ioctl index 7 offset 0. bit0 = enable the PP2 IC25 custom.
+// Absent from an MRA leaves it 0, which is correct for PP1 and polepos2b.
 reg [7:0] pp_mod = 8'd0;
 always @(posedge clk_sys) begin
 	if (ioctl_wr && (ioctl_index == 8'd7) && (ioctl_addr == 25'd0))
@@ -425,9 +379,6 @@ always @(posedge clk_sys) begin
 	chars_gfx_data <= chars_rom[chars_gfx_addr];
 end
 
-// TILES (view/bg) gfx ROM — ioctl INDEX 1, offset 0x1000-0x1FFF (sibling of the
-// chars ROM above; idx1 = chars@0x000 then tiles@0x1000). ioctl_addr[11:0] maps
-// 0x1000->0 within the region. Sync 1-clk read feeds the view renderer. 2026-07-18.
 wire [12:0] tiles_gfx_addr;
 reg  [7:0]  tiles_gfx_data;
 reg  [7:0]  tiles_rom [0:8191];
@@ -437,9 +388,6 @@ always @(posedge clk_sys) begin
 	tiles_gfx_data <= tiles_rom[tiles_gfx_addr];
 end
 
-// RESTORED-2026-07-28: STARTUP-STRIP-2026-07-27 had these commented out
-// (105KB combined, dead weight while pp_road_gen/pp_sprite_gen were disabled
-// in pp_video_composite.sv). Restored alongside re-enabling those generators.
 wire [14:0] road_rom_addr;
 reg  [7:0]  road_rom_data;
 reg  [7:0]  road_rom [0:20479];    // 0x5000
@@ -461,18 +409,11 @@ end
 wire [16:0] sprgfx_addr;
 reg  [7:0]  sprgfx_data;
 reg  [7:0]  sprite_rom [0:81919];  // 0x14000
-// PP2-EXPAND-2026-09-21: the index-1 stream is now padded to MAME's DECLARED
-// region sizes (= the PP2 maximum), so one set of gates serves PP1 and PP2.
-// PP1 zero-fills the difference. Layout, generated by verilator/survey/mra_emit.py
-// (IDX1_PAD) -- these gates and that table are one contract, change them together:
-//   chars 0x00000..0x01FFF | tiles 0x02000..0x03FFF | sprites 0x04000..0x07FFF
-//   bigsprites 0x08000..0x17FFF | road 0x18000..0x1CFFF | scalelut 0x1D000..0x1DFFF
-// PP1 pads: chars +0x1000, tiles +0x1000, bigsprites +0x2000 trailing.
-// bigsprites keeps its INTERNAL 0x2000 gap (MAME loads 0x0000-0x5FFF and
-// 0x8000-0xDFFF), which lands at sprite_rom[0xA000-0xBFFF]; the trailing pad
-// lands at sprite_rom[0x12000-0x13FFF]. Both are zeros, matching MAME.
-// ⛔ The pre-2026-09-21 comment here insisted the unpadded 0x1A000 layout was the
-// only correct one. That was true of the OLD MRA, not this one.
+// Index-1 stream, padded to MAME's declared region sizes so one gate set serves
+// PP1 and PP2. Must match IDX1_PAD in verilator/survey/mra_emit.py:
+//   chars 0x00000 | tiles 0x02000 | sprites 0x04000 | bigsprites 0x08000
+//   road  0x18000 | scalelut 0x1D000                        end 0x1E000
+// bigsprites keeps MAME's internal 0x2000 gap at sprite_rom[0xA000-0xBFFF].
 wire        sprite_wr = ioctl_wr & (ioctl_index == 8'd1) & (ioctl_addr >= 25'h4000) & (ioctl_addr < 25'h18000);
 always @(posedge clk_sys) begin
 	if (sprite_wr) sprite_rom[ioctl_addr - 25'h4000] <= ioctl_dout;
@@ -497,20 +438,10 @@ wire        wsg_prom_wr   = ioctl_wr & (ioctl_index == 8'd2) & (ioctl_addr >= 25
 wire [7:0]  wsg_prom_addr = ioctl_addr[7:0] - 8'h40;
 wire [7:0]  wsg_prom_data = ioctl_dout;
 
-// STEP-3b-2: Namco 5xxx MCU internal ROMs — ioctl INDEX 6, region-relative
-// (resets to 0 at this index): 51xx.bin@0x000 53xx.bin@0x400 54xx.bin@0x800
-// 52xx.bin@0xC00, each 0x400 (2026-07-28: extended 0xC00-0xFFF to cover 52xx once
-// its firmware was sourced -- was previously excluded, gate stopped at 0xC00).
-// poleposition.vhd decodes addr[11:10] internally per-wrapper (namco_51xx.sv
-// claims 00, namco_53xx.sv claims 01, namco_54xx.sv claims 10, namco_52xx.sv
-// claims 11).
 wire        mcu_rom_wr   = ioctl_wr & (ioctl_index == 8'd6) & (ioctl_addr < 25'h1000);
 wire [11:0] mcu_rom_addr = ioctl_addr[11:0];
 wire [7:0]  mcu_rom_data = ioctl_dout;
 
-// namco_52xx sample ("voice") ROM — ioctl INDEX 5, region-relative 0x4000-0xBFFF
-// (0x8000 bytes; the "engine" slice 0x0000-0x3FFF is a separate unbuilt device,
-// not loaded here -- see PolePosition_CPU.sv's engine_* TODO). 2026-07-28.
 wire [14:0] sample52_addr;
 reg  [7:0]  sample52_data;
 reg  [7:0]  sample52_rom [0:32767]; // 0x8000
@@ -570,7 +501,7 @@ poleposition poleposition
 	.clock_18(clk_sys),
 	.reset(reset),
 	.wdog_en(wdog_en),
-	.sub_illegal(sub_illegal),   // ILLEGAL-SCREAM-2026-08-09
+	.sub_illegal(sub_illegal),
 
 	.dn_addr(ioctl_addr[16:0]),
 	.dn_data(ioctl_dout),
@@ -593,7 +524,6 @@ poleposition poleposition
 	.sample52_addr(sample52_addr),
 	.sample52_data(sample52_data),
 
-	// ENGINE-SOUND-2026-08-06
 	.engine_addr(engine_addr),
 	.engine_data(engine_data),
 
@@ -621,7 +551,6 @@ poleposition poleposition
 
 	.audio(audio),
 
-	// CONTROLS-2026-08-09: OSD toggle OR the new Service Mode button (physical Y).
 	.self_test(status[6] | m_service_mode),
 
 	// NOTE: `service` is MAME IN0 bit 6 = IPT_SERVICE1, the service-CREDIT button --
@@ -631,18 +560,8 @@ poleposition poleposition
 	.coin2(m_coin2),
 	.start1(m_start1),
 	.start2(m_start2),
-	// XEVIOUS-STRIP-2026-08-06: the up1/down1/left1/right1 and up2/down2/left2/
-	// right2/fire2 connections are gone -- those entity ports were Xevious
-	// two-player scaffold and were referenced nowhere inside poleposition.vhd.
-	// fire1 stays because it is the real Gear Change input (IN0 bit 0x02); Pole
-	// Position has only one gear, so there is no P2 counterpart to keep.
 	.fire1(m_gear1),      // scaffold port name; carries Gear Change -> in0_byte bit1
 
-	// GEAR-FIX-2026-08-06: dip_switch_b is now the plain DSWB byte. It used to be
-	// {dsw[1][7:5], ~m_bomb2, dsw[1][3:1], ~m_bomb1} -- Xevious-scaffold leftovers
-	// that overwrote bit4 (part of poleposa "Extended Rank", mask 0x1c) and bit0
-	// ("Demo Sounds") with the P2/P1 gear buttons, so neither setting could ever be
-	// set from the MRA and pressing Gear changed a DIP at runtime.
 	.dip_switch_a(dsw[0]),
 	.dip_switch_b(dsw[1]),
 
@@ -673,11 +592,6 @@ wire hs_write_enable;
 wire hs_pause;
 wire hs_configured;
 
-// HISCORE — re-enabled 2026-09-20 once the NVRAM window was actually wired.
-// It had been running UNCONFIGURED (MRA had no ioctl index 3) AND its RAM port was
-// a stub (poleposition.vhd hardwired hs_data_out to 0), so it could never work.
-// Now: MRA index 3 carries @:maincpu,program,3000,7f2,b0,95 and hs_* reaches the
-// NVRAM's free port B. See [[Hiscore module causes progressive slowdown when unconfigured]].
 hiscore #(
 	.HS_ADDRESSWIDTH(11),          // 2 KB NVRAM, Z80 $3000-$37FF (2048 >= $7F2)
 	.HS_SCOREWIDTH(11),            // HISCORE-SCOREWIDTH-2026-09-20: capture buffer must

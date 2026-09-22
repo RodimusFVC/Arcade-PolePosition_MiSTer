@@ -56,18 +56,14 @@ module pp_tile_decode
     assign tile_code  = { tile_word[14], tile_word[7:0] };
     assign tile_color = tile_word[13:8];
 
-    // Code bit8 (word[14]) is LIVE: PP2 has 512 tiles. chacl==0 masks it to 8
-    // bits on the alpha layer only (polepos_v.cpp:162-166); the view layer ties
-    // chacl=1, matching bg_get_tile_info which has no such mask. PP1 needs no
-    // per-game gate: its MRA mirrors the 0x1000 chars/tiles ROM across the
-    // 0x2000 window, so code 256+N reads tile N -- what a 4 KB ROM with no A12
-    // does on real hardware, and what MAME's `code %= total_elements` does
-    // (charlayout_2bpp is RGN_FRAC(1,1), so elements track the region size).
+    // Code bit8 (word[14]) is live: PP2 has 512 tiles. chacl==0 masks it to 8
+    // bits on the alpha layer only (polepos_v.cpp:162-166); view ties chacl=1.
+    // PP1 needs no gate: its MRA mirrors the 0x1000 ROM, so code 256+N = tile N.
     wire [8:0] code9 = chacl ? tile_code : { 1'b0, tile_code[7:0] };
 
     // ---- gfx ROM byte address (charlayout_2bpp) ------------------------------
     //   16 bytes/tile; per row y two bytes: offset y = LEFT 4px, 8+y = RIGHT 4px.
-    //   addr = {code8, half, row}  (half 0=left, 1=right)  -> 12 bits = 0x1000.
+    //   addr = {code9, half, row}  (half 0=left, 1=right)  -> 13 bits = 0x2000.
     assign gfx_addr_l = { code9, 1'b0, row };
     assign gfx_addr_r = { code9, 1'b1, row };
 

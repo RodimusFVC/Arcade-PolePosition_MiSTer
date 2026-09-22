@@ -1,4 +1,4 @@
-// BATCH 9 2026-07-28: cycle-accuracy lookup table, mechanically generated from a
+// cycle-accuracy lookup table, mechanically generated from a
 // script cross-referencing every dispatch condition in this file (as of the 0x2F/
 // 0x0D guard fixes) against MAME's z8000tbl.hxx cycle-count column, replaying
 // MAME's own init_tables() last-entry-wins overlap resolution to build a 65536-word

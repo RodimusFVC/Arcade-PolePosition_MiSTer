@@ -35,10 +35,6 @@ port(
  -- Driven from Arcade-PolePosition.sv's OSD "Watchdog" toggle, default ON.
  wdog_en        : in std_logic;
 
- -- ILLEGAL-SCREAM-2026-08-09: sticky 'a Z8002 sub hit an unimplemented opcode'
- -- flag. z8002.sv's S_ILLEGAL is a TERMINAL state -- the sub stops dead, silently,
- -- and the only symptom is frozen road/sprite/view buffers (reads as a video bug).
- -- Routed to LED_USER in Arcade-PolePosition.sv.
  sub_illegal    : out std_logic;
 
  dn_addr        : in  std_logic_vector(16 downto 0);
@@ -48,19 +44,12 @@ port(
  -- PP2 IC25 protection overlay enable (MRA mod byte, index 7 bit 0).
  ic25_en        : in  std_logic;
 
- -- INCR-1a (DIAG-REVERT-2026-07-13): chars (alpha) gfx ROM interface. The ROM
- -- lives in the top (loaded at ioctl index 1); the alpha renderer here drives addr.
  gfx_addr       : out std_logic_vector(12 downto 0);
  gfx_data       : in  std_logic_vector(7 downto 0);
 
- -- INCR-view (2026-07-18): tiles (view/bg) gfx ROM interface. Sibling of the
- -- chars ROM; lives in the top (ioctl index 1 @0x1000); view renderer drives addr.
  view_gfx_addr  : out std_logic_vector(12 downto 0);
  view_gfx_data  : in  std_logic_vector(7 downto 0);
 
- -- INCR-video (2026-07-18): road / scalelut / sprite gfx ROMs (all in the top,
- -- ioctl idx1: road @0x18000, scalelut @0x1D000, sprite small@0x4000 + big@0x8000
- -- -> combined sprite ROM @(ioctl_addr-0x4000)). The road/sprite generators drive addr.
  road_rom_addr  : out std_logic_vector(14 downto 0);
  road_rom_data  : in  std_logic_vector(7 downto 0);
  scalelut_addr  : out std_logic_vector(11 downto 0);
@@ -109,11 +98,7 @@ port(
  flip           : in std_logic;
  h_offset	: in signed(3 downto 0);
  v_offset	: in signed(3 downto 0);
- -- DIAG-REVERT-2026-08-16: palette-swatch overlay enable (OSD O7). 0 = normal.
  diag_swatch    : in std_logic;
- -- XEVIOUS-STRIP-2026-08-06: `test_v : in std_logic_vector(3 downto 0)` removed.
- -- It was declared here, referenced nowhere in the architecture, and left
- -- unconnected at the instantiation -- an undriven input on every build.
 
  audio          : out std_logic_vector(15 downto 0);
 
@@ -128,13 +113,6 @@ port(
  coin2          : in std_logic;
  start2         : in std_logic;
 
- -- XEVIOUS-STRIP-2026-08-06: up1/down1/left1/right1 and up2/down2/left2/right2/
- -- fire2 were removed from this entity. They were Xevious two-player scaffold
- -- ports: declared here and referenced NOWHERE in the architecture below. Pole
- -- Position's directional controls are ANALOG (steering via the 53xx, pedals via
- -- the ADC0804), and it has exactly ONE gear input, so there is no P2 equivalent.
- -- The P1 direction signals still exist in Arcade-PolePosition.sv, where they
- -- drive the digital steering/pedal placeholders.
 
  pause          : in std_logic;
 
@@ -186,11 +164,9 @@ architecture struct of poleposition is
  -- alpha scanout (renderer <-> PolePosition_CPU)
  signal bru_scan_addr   : std_logic_vector(10 downto 0);
  signal alpha_scan_dout : std_logic_vector(15 downto 0);
- -- view/bg scanout + hscroll (renderer <-> PolePosition_CPU), 2026-07-18
  signal view_scan_addr_w : std_logic_vector(10 downto 0);
  signal view_scan_dout_w : std_logic_vector(15 downto 0);
  signal hscroll_w        : std_logic_vector(15 downto 0);
- -- road/sprite scanout + road vscroll (renderer <-> PolePosition_CPU), 2026-07-18
  signal road_scan_addr_w   : std_logic_vector(9 downto 0);
  signal road_scan_dout_w   : std_logic_vector(15 downto 0);
  signal sprite_scan_addr_w : std_logic_vector(10 downto 0);
@@ -270,19 +246,13 @@ architecture struct of poleposition is
  -- were open/zero8 tie-offs; now real (see u_wsg instance + wiring below).
  signal sound_en_w  : std_logic;
 
- -- ENGINE-SOUND-2026-08-06: engine ("car") sound, rtl/pp_engine_snd.sv.
- -- wsg_audio_w/engine_audio_w are the two voices; `audio` is their mix (below).
  signal engine_dout_w   : std_logic_vector(7 downto 0);
  signal engine_lsb_wr_w : std_logic;
  signal engine_msb_wr_w : std_logic;
  signal wsg_audio_w     : std_logic_vector(15 downto 0);
  signal engine_audio_w  : std_logic_vector(15 downto 0);
- -- VOICE52-2026-08-11: third voice. n52_p_w is the 52xx's OUT0-OUT3 audio pins,
- -- which were connected to `open` until now (hence: no voice samples at all).
  signal n52_p_w         : std_logic_vector(3 downto 0);
  signal voice_audio_w   : std_logic_vector(15 downto 0);
- -- NOISE54-2026-08-11: fourth voice. The 54xx's three discrete level outputs,
- -- likewise connected to `open` until now (hence: no screech/crash/rumble).
  signal n54_o0_w        : std_logic_vector(3 downto 0);
  signal n54_o1_w        : std_logic_vector(3 downto 0);
  signal n54_r1_w        : std_logic_vector(3 downto 0);
@@ -413,7 +383,7 @@ architecture struct of poleposition is
  );
  end component;
 
- -- VOICE52-2026-08-11: rtl/sound/pp_voice52_snd.sv (MAME polepos_a.cpp CHANL4).
+ -- rtl/sound/pp_voice52_snd.sv (MAME polepos_a.cpp CHANL4).
  -- Takes the 52xx's 4-bit PCM output pins and does DAC + filter + level.
  component pp_voice52_snd
  port(
@@ -425,7 +395,7 @@ architecture struct of poleposition is
  );
  end component;
 
- -- NOISE54-2026-08-11: rtl/sound/pp_noise54_snd.sv (MAME polepos_a.cpp
+ -- rtl/sound/pp_noise54_snd.sv (MAME polepos_a.cpp
  -- CHANL1/2/3). Three 4-bit levels from the 54xx -> DAC + bandpass -> one mix.
  component pp_noise54_snd
  port(
@@ -561,7 +531,6 @@ architecture struct of poleposition is
    scan_view_dout   : out std_logic_vector(15 downto 0);
    hscroll          : out std_logic_vector(15 downto 0);
    vscroll          : out std_logic_vector(15 downto 0);
-   -- HISCORE-NVRAM-2026-09-20: hiscore window onto the NVRAM's free port B
    hs_address       : in  std_logic_vector(10 downto 0);
    hs_data_out      : out std_logic_vector(7 downto 0);
    hs_data_in       : in  std_logic_vector(7 downto 0);
@@ -581,13 +550,6 @@ architecture struct of poleposition is
  );
  end component;
 
- -- 2026-08-05: gen_video is now SystemVerilog (rtl/gen_video.sv). A SV module is
- -- NOT a VHDL primary unit in library `work`, so the previous direct-entity bind
- -- (`entity work.gen_video`) fails with Error 10481. Declared as a plain VHDL
- -- `component` instead -- the same proven Q17 pattern already used above for
- -- namco_06xx/51xx/52xx/53xx/54xx, namco_wsg8, adc0804, pp_video_composite,
- -- PolePosition_CPU and pp_watchdog, all of which are SystemVerilog modules.
- -- Port names/types/order copied verbatim from gen_video.vhd's entity.
  component gen_video
  port(
    clk      : in  std_logic;
@@ -622,36 +584,10 @@ zero11 <= (others => '0');
 
 blank_v      <= vblank;
 video_en     <= ena_vidgen;
--- HISCORE-NVRAM-2026-09-20: stub removed -- hs_data_out now comes from the NVRAM
--- port B inside PolePosition_CPU. Original: hs_data_out <= (others => '0');
 
 cpu_ioctl_addr <= "00000000" & dn_addr;
 cpu_rom_wr     <= dn_wr when dn_addr(16 downto 12) < "00011" else '0';  -- maincpu region < 0x3000
 
--- Z80 / Z8002 clock enable = clock_18 /16
---
--- CEN-PHASE-FIX-2026-08-05: cen_cnt is now RESET-SYNCHRONISED. It previously had
--- no reset and free-ran from FPGA configuration, while PolePosition_subcpu.sv's
--- `div` counter (which owns the shared-VRAM port-A time-division mux) DOES reset:
---     always @(posedge clk) if (reset) div <= 4'd0; else div <= div + 4'd1;
--- Both are 4-bit and tick every clock, so the PHASE between this `cen` pulse and
--- the Z80's port-A ownership window (own_z80 = div <= 4, i.e. 5 slots of 16) was
--- arbitrary -- determined by whenever reset happened to be released, and shifted
--- by every subsequent reset.
---
--- Consequence when the phase lands wrong: `cen` fires outside div 0..4, so
--- own_z80 is low for the entire Z80 access and EVERY Z80 read/write to shared
--- VRAM is silently dropped -- no stall, no retry, no error. Reads additionally
--- capture whichever address another master had on the shared port.
---
--- This is a prime suspect for the HW-only self-test "RAM 73" failure (a Z8002
--- sub's RAM pattern test over shared VRAM) that Verilator never reproduces: the
--- sim releases reset at a fixed cycle after ROM load and so always lands on the
--- same -- evidently good -- phase, while real HW's reset release is gated by the
--- reset chain / ioctl_download and lands elsewhere.
---
--- Resetting cen_cnt to 0 alongside div makes `cen` fire at div=0, inside the
--- Z80's ownership window, deterministically and identically on every reset.
 process (clock_18)
 begin
 	if rising_edge(clock_18) then
@@ -836,7 +772,6 @@ port map(
 	scan_view_dout   => view_scan_dout_w,
 	hscroll          => hscroll_w,
 	vscroll          => road_vscroll_w,
-	-- HISCORE-NVRAM-2026-09-20: pass the top-level hiscore port straight through
 	hs_address       => hs_address,
 	hs_data_out      => hs_data_out,
 	hs_data_in       => hs_data_in,
@@ -874,14 +809,6 @@ port map(
 	intr_n   => adc_intr_n_w
 );
 
--- RESTORED-2026-07-28: STARTUP-STRIP-2026-07-27 had this commented out (WSG
--- was ~2,634 ALMs, cut to save Quartus compile time while chasing the boot
--- hang). The z8002.sv register-writeback-bus refactor freed ~5,400 ALMs
--- (28,789->23,364, 56% device util post-fit), so there's ample headroom to
--- bring real sound back. This also fixes the sim/HW self-test divergence on
--- the WSG readback stub (production tied wsg_din_w to 0x00, the Verilator
--- testbench independently tied it to 0xFF -- restoring the real chip here
--- removes the stub entirely, so there's nothing left to disagree).
 u_wsg : namco_wsg8
 port map(
 	clk       => clock_18,
@@ -919,7 +846,7 @@ port map(
 );
 
 -- ---- 52xx voice ("sample player") -----------------------------------------
--- VOICE52-2026-08-11: MAME polepos_a.cpp CHANL4. The 52xx MCU decodes the
+-- MAME polepos_a.cpp CHANL4. The 52xx MCU decodes the
 -- voice ROM itself and puts 4-bit PCM on its P pins (namco52.cpp:14 "OUT0-OUT3
 -- = sound output"), so this stage is only the analog tail: R1 ladder DAC,
 -- VREF offset, highpass, lowpass, level. See pp_voice52_snd.sv for the two
@@ -934,7 +861,7 @@ port map(
 );
 
 -- ---- 54xx noise (tyre screech / crash / rumble) ----------------------------
--- NOISE54-2026-08-11: MAME polepos_a.cpp CHANL1/2/3. The 54xx MCU generates the
+-- MAME polepos_a.cpp CHANL1/2/3. The 54xx MCU generates the
 -- waveform and presents three 4-bit levels; this stage is DAC + bandpass only.
 -- Channel->band mapping is load-bearing, see pp_noise54_snd.sv's header.
 u_noise54 : pp_noise54_snd
@@ -948,12 +875,6 @@ port map(
 	audio   => noise_audio_w
 );
 
--- ---- audio mix ------------------------------------------------------------
--- Sum then saturate, so the WSG keeps its previous level (a plain >>1 mix would
--- have quietly halved it) and only genuine peaks clip.
--- VOICE52-2026-08-11: widened 17 -> 18 bits for the third voice.
--- NOISE54-2026-08-11: fourth voice added. 18 bits still covers four 16-bit
--- signed inputs (4 x 32768 = 2^17, one bit of sign headroom left).
 audio_mix_s <= resize(signed(wsg_audio_w), 18) + resize(signed(engine_audio_w), 18)
                                                + resize(signed(voice_audio_w), 18)
                                                + resize(signed(noise_audio_w), 18);
@@ -961,12 +882,6 @@ audio <= x"7FFF" when audio_mix_s >  to_signed(32767, 18) else
          x"8000" when audio_mix_s < to_signed(-32768, 18) else
          std_logic_vector(audio_mix_s(15 downto 0));
 
--- ---- Namco 5xxx MCU clock enable (see signal declaration comment) ----------
--- MCU-PHASE-FIX-2026-08-05: same defect class as CEN-PHASE-FIX above. mcu_div is
--- a toggle with no reset, so its polarity after any reset was arbitrary (whatever
--- it happened to hold), making mcu_ena land on either the even or the odd `cen`
--- -- non-deterministic across resets. The 51xx/53xx sit on the 06xx handshake in
--- the boot path, so give them a deterministic enable phase too.
 process (clock_18)
 begin
 	if rising_edge(clock_18) then
@@ -975,8 +890,6 @@ begin
 			mcu_div_cnt <= 0;                       -- MCU-DIV6-2026-08-11
 		elsif cen = '1' then
 			mcu_div <= not mcu_div;
-			-- MCU-DIV6-2026-08-11: modulo-MCU_CEN_DIV replaces the /2 toggle.
-			-- Reset to 0 keeps the MCU-PHASE-FIX-2026-08-05 determinism.
 			if mcu_div_cnt = MCU_CEN_DIV - 1 then
 				mcu_div_cnt <= 0;
 			else
@@ -985,13 +898,6 @@ begin
 		end if;
 	end if;
 end process;
--- MCU-DIV6-2026-08-11: original below, restore by setting MCU_CEN_DIV = 2 (the
--- line itself is equivalent to the old one at that setting -- mcu_div is kept
--- driven so the old expression can be dropped back in verbatim if needed).
--- mcu_ena <= cen and mcu_div and (not pause);
--- Fires on the LAST count, not the first: at MCU_CEN_DIV = 2 that is the 2nd
--- `cen`, exactly where the old `mcu_div` toggle fired. So setting the constant
--- back to 2 restores the previous behaviour bit-for-bit, phase included.
 mcu_ena <= '1' when (cen = '1' and mcu_div_cnt = MCU_CEN_DIV - 1 and pause = '0') else '0';
 
 -- MCUs held in reset by EITHER the system reset OR the LS259 namco_reset latch
@@ -1073,16 +979,9 @@ port map(
 	rom_wr      => mcu_rom_wr,
 	rom_addr_in => mcu_rom_addr,
 	rom_data_in => mcu_rom_data,
-	-- TC-TIMER-FIX-2026-07-17: vblank -> 51xx mb88 external-counter timer (was stubbed).
-	-- `vblank` is gen_video's blank_v (1 during vertical blank); the 51xx inverts it to
-	-- the TC pin level internally. This is what advances the 51xx per-frame self-test logic.
 	vblank      => vblank
 );
 
--- 2026-08-05: the 53xx was temporarily removed here to test whether it explained the
--- HW-only "RAM 73" self-test failure (the Verilator rig omits namco_53xx and ties
--- chip1_din to 0xFF, making it the only 06xx-bus delta between the two environments).
--- RESULT: HW-tested, ZERO difference — same RAM 73. The 53xx is NOT the cause. Restored.
 u_n53xx : namco_53xx
 port map(
 	clk         => clock_18,
@@ -1108,7 +1007,6 @@ port map(
 	chip_sel    => n06_chipsel(3),
 	wr_en       => n06_chip_wr(3),
 	wr_data     => n06_chip_dout,
-	-- NOISE54-2026-08-11: all three were `open` (screech/crash/rumble silent)
 	discrete_o0 => n54_o0_w,
 	discrete_o1 => n54_o1_w,
 	discrete_r1 => n54_r1_w,
@@ -1137,7 +1035,6 @@ port map(
 	rom_data_in => mcu_rom_data
 );
 
--- video output register (bring-up RGB -> DAC; original palette path removed)
 process (clock_18)
 begin
 	if rising_edge(clock_18) then
