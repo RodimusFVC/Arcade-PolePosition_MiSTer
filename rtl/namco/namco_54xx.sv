@@ -76,7 +76,7 @@ module namco_54xx
     wire [10:0] rom_addr;
     wire  [7:0] rom_data;
 
-    mb88 u_mcu
+    mb88 #(.IRQ_ENTRY_STALL(3)) u_mcu   // IRQ-ENTRY-STALL-2026-09-23: MAME-exact entry, see mb88_core.sv
     (
         .clock      (clk),
         .ena        (ena),

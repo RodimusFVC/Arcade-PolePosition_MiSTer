@@ -258,6 +258,8 @@ architecture struct of poleposition is
  signal n54_r1_w        : std_logic_vector(3 downto 0);
  signal noise_audio_w   : std_logic_vector(15 downto 0);
  signal audio_mix_s     : signed(17 downto 0);
+ signal wsg_gain_s      : signed(24 downto 0);   -- AUDIO-MIX-2026-09-23: WSG * MAME route 0.80
+ signal voice_gain_s    : signed(24 downto 0);   -- AUDIO-MIX-2026-09-23: 52xx * MAME discrete route 0.90
  signal wsg_addr_w  : std_logic_vector(5 downto 0);
  signal wsg_dout_w  : std_logic_vector(7 downto 0);
  signal wsg_wr_w    : std_logic;
@@ -875,9 +877,17 @@ port map(
 	audio   => noise_audio_w
 );
 
-audio_mix_s <= resize(signed(wsg_audio_w), 18) + resize(signed(engine_audio_w), 18)
-                                               + resize(signed(voice_audio_w), 18)
-                                               + resize(signed(noise_audio_w), 18);
+-- AUDIO-MIX-2026-09-23: MAME polepos.cpp route gains. WSG 0.80 and 52xx 0.90 applied here;
+-- engine (0.90*0.77) and 54xx (0.90) are folded into their modules' output scaling.
+-- Original unweighted sum below.
+-- audio_mix_s <= resize(signed(wsg_audio_w), 18) + resize(signed(engine_audio_w), 18)
+--                                                + resize(signed(voice_audio_w), 18)
+--                                                + resize(signed(noise_audio_w), 18);
+wsg_gain_s   <= signed(wsg_audio_w)   * to_signed(205, 9);   -- 205/256 = 0.80
+voice_gain_s <= signed(voice_audio_w) * to_signed(230, 9);   -- 230/256 = 0.90
+audio_mix_s <= resize(shift_right(wsg_gain_s, 8), 18) + resize(signed(engine_audio_w), 18)
+                                                      + resize(shift_right(voice_gain_s, 8), 18)
+                                                      + resize(signed(noise_audio_w), 18);
 audio <= x"7FFF" when audio_mix_s >  to_signed(32767, 18) else
          x"8000" when audio_mix_s < to_signed(-32768, 18) else
          std_logic_vector(audio_mix_s(15 downto 0));

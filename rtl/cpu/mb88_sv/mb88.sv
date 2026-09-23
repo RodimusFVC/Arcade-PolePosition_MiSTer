@@ -14,7 +14,7 @@
 //  shim entity `mb88` wrapping mb88_core is the fallback.
 // ============================================================================
 
-module mb88
+module mb88 #(parameter IRQ_ENTRY_STALL = 0)   // IRQ-ENTRY-STALL-2026-09-23, see mb88_core.sv
 (
     input  wire        clock,
     input  wire        ena,
@@ -73,7 +73,7 @@ module mb88
         end
     end
 
-    mb88_core core
+    mb88_core #(.IRQ_ENTRY_STALL(IRQ_ENTRY_STALL)) core
     (
         .clk       (clock),
         .ce        (ena),

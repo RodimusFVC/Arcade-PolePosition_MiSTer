@@ -36,7 +36,11 @@
 //      table; add a pla_data port only if a target programs a custom output PLA.
 // ============================================================================
 
-module mb88_core
+// IRQ-ENTRY-STALL-2026-09-23: extra ce cycles spent entering an interrupt before the handler's first
+// fetch. 0 = legacy 1-ce entry (51xx/52xx/53xx rely on it; the global MAME-exact change broke the
+// 51xx and the main-CPU POST on 2026-09-19). 3 = MAME burn_cycles(3); the 54xx needs it or its IRQ
+// handler reads the command latch before the 06xx byte lands (verilator/n54_cosim).
+module mb88_core #(parameter IRQ_ENTRY_STALL = 0)
 (
     input  wire        clk, ce, reset_n,
     input  wire        ena_timer,      // timer enable (already ÷32-prescaled externally)
@@ -88,6 +92,7 @@ module mb88_core
     reg [3:0]  ram [0:127];
     reg        retire, illegal;
     reg        in_irq, int_ack;
+    reg  [1:0] irq_stall;                        // IRQ-ENTRY-STALL-2026-09-23
     reg        tc_in_d;       // TC pin level registered, for external-counter falling-edge detect
     reg [10:0] fetch_pc;
     reg [2:0]  pending_irq;    // {external, timer, serial} pending  (bit2/1/0)
@@ -149,7 +154,7 @@ module mb88_core
             // R0 resets HIGH (MB8841.pdf: output ports high during reset); R1-R3 low
             // (R3.3 high => spurious NMI). Z80 reads R0.bit1 at boot to arm E039 — must be 1.
             r_out<=16'h000F; p_out<=0; o_out<=0; so_out<=0; o_wr<=1'b0;
-            retire<=0; illegal<=0; state<=S_FETCH; op1<=0;
+            retire<=0; illegal<=0; state<=S_FETCH; op1<=0; irq_stall<=2'd0;
             in_irq<=0; int_ack<=0; fetch_pc<=0; pending_irq<=0; TP<=0; tc_in_d<=1'b1;
             SBcount<=11'd0; serial_ps<=3'd0; serial_disabled<=1'b0;
             // SP[] and ram[] intentionally NOT reset (MAME device_reset doesn't
@@ -199,6 +204,8 @@ module mb88_core
             retire <= 1'b0; int_ack <= 1'b0;
             o_wr <= 1'b0;                       // O-PORT-STROBE-2026-08-09
             wr_en = 1'b0; wr_val = 4'h0; wr_addr = 7'h0;
+            if (irq_stall != 2'd0) irq_stall <= irq_stall - 2'd1;   // IRQ-ENTRY-STALL: no fetch while entering
+            else
             case (state)
             // ==================================================================
             S_FETCH: if ((int_req || |active_irq) && !in_irq) begin
@@ -209,6 +216,7 @@ module mb88_core
                 PA <= 5'd0; PC <= int_req ? int_vec : hw_vec;  // ext 0x02/timer 0x04/serial 0x06
                 in_irq <= 1'b1; st <= 1'b1; int_ack <= 1'b1;   // no retire (not an insn)
                 pending_irq <= 3'b000;                          // MAME clears all pending on take
+                irq_stall <= IRQ_ENTRY_STALL[1:0];              // IRQ-ENTRY-STALL-2026-09-23
             end else begin
                 fetch_pc <= {PA,PC};     // executing instruction's own PC (matches MAME)
                 PC<=pc_n; PA<=pa_n;      // default INCPC (branches override below)
