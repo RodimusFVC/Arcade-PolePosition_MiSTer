@@ -4,6 +4,7 @@ set_global_assignment -name SYSTEMVERILOG_FILE rtl/ram_rom/gen_ram.sv
 set_global_assignment -name MIF_FILE           rtl/ram_rom/pp_nvram_ff.mif
 set_global_assignment -name VHDL_FILE          rtl/ram_rom/spram.vhd
 set_global_assignment -name QIP_FILE           rtl/cpu/T80/T80.qip
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/pp_steering.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/cpu/mb88_sv/mb88_core.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/cpu/mb88_sv/mb88.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/cpu/z8002/z8002.sv

@@ -78,6 +78,15 @@ localparam CONF_STR = {
 	"P2,Pause options;",
 	"P2OA,Pause when OSD is open,On,Off;",
 	"P2OB,Dim video after 10s,On,Off;",
+	"P3,Controls;",
+	"P3OHI,Steering,D-pad,Analog stick/wheel,Paddle;",
+	"P3OEG,Steering sensitivity,1.0x,0.75x,0.5x,0.25x,0.125x,1.25x,1.5x,2.0x;",
+	"P3OD,Steering direction,Normal,Reversed;",
+	"P3O9,Pedals,Digital buttons,Analog;",
+	"P3OL,Pedal axis,Left stick Y,Right stick Y;",
+	"P3-;",
+	"P3-,Spinner and mouse always steer;",
+	"P3-,Analog pedals: up = gas, down = brake;",
 	"-;",
 	"O2,Watchdog,On,Off;",
 	"O6,Service Mode,Off,On;",
@@ -164,6 +173,11 @@ wire  [7:0] ioctl_din;
 wire  [7:0] ioctl_index;
 
 wire [15:0] joystick_0, joystick_1;
+wire [15:0] joystick_l_analog_0;   // STEERING-2026-09-23: analog wheel/stick (X = [7:0], signed)
+wire [15:0] joystick_r_analog_0;   // PEDALS-2026-09-23: optional pedal axis (Y = [15:8], signed)
+wire  [8:0] spinner_0;
+wire  [7:0] paddle_0;
+wire [24:0] ps2_mouse;
 wire [15:0] joy = joystick_0 | joystick_1;
 
 wire [21:0] gamma_bus;
@@ -190,6 +204,11 @@ hps_io #(.CONF_STR(CONF_STR)) hps_io
 	.ioctl_index(ioctl_index),
 
 	.ps2_key(ps2_key),
+	.ps2_mouse(ps2_mouse),
+	.spinner_0(spinner_0),
+	.paddle_0(paddle_0),
+	.joystick_l_analog_0(joystick_l_analog_0),
+	.joystick_r_analog_0(joystick_r_analog_0),
 	.joystick_0(joystick_0),
 	.joystick_1(joystick_1)
 );
@@ -471,15 +490,33 @@ end
 // this Namco scaffold's entity, per poleposition.vhd's gutted CPU section) so
 // the 53xx's steering_changed/delta logic has SOMETHING to react to for a
 // first HW bring-up. Swap for a real spinner/paddle mapping later.
-reg [15:0] steer_div;
-reg  [7:0] steer_pos = 8'h80;
-always @(posedge clk_sys) begin
-	steer_div <= steer_div + 1'b1;
-	if (steer_div == 16'd0) begin  // clk_sys(49.152MHz)/65536 ~= 750 Hz update rate
-		if (m_left1  & ~m_right1) steer_pos <= steer_pos - 1'b1;
-		if (m_right1 & ~m_left1)  steer_pos <= steer_pos + 1'b1;
-	end
-end
+// STEERING-2026-09-23: replaced by pp_steering (spinner / mouse / analog wheel / paddle / D-pad).
+// Original D-pad-only counter below.
+// reg [15:0] steer_div;
+// reg  [7:0] steer_pos = 8'h80;
+// always @(posedge clk_sys) begin
+// 	steer_div <= steer_div + 1'b1;
+// 	if (steer_div == 16'd0) begin  // clk_sys(49.152MHz)/65536 ~= 750 Hz update rate
+// 		if (m_left1  & ~m_right1) steer_pos <= steer_pos - 1'b1;
+// 		if (m_right1 & ~m_left1)  steer_pos <= steer_pos + 1'b1;
+// 	end
+// end
+wire [7:0] steer_pos;
+pp_steering pp_steering
+(
+	.clk         (clk_sys),
+	.reset       (reset),
+	.mode        (status[18:17]),
+	.sensitivity (status[16:14]),
+	.reverse     (status[13]),
+	.left        (m_left1),
+	.right       (m_right1),
+	.spinner     (spinner_0),
+	.mouse       (ps2_mouse),
+	.analog_x    (joystick_l_analog_0[7:0]),
+	.paddle      (paddle_0),
+	.steer_pos   (steer_pos)
+);
 
 // ADC0804 accelerator/brake pedal inputs (rtl/adc0804.sv via poleposition.vhd's
 // accel_in/brake_in ports) — DIGITAL PLACEHOLDER, no real analog/pedal input is
@@ -491,10 +528,26 @@ end
 // PORT_MINMAX(0,0x90) on both ACCEL and BRAKE. Swap for real pedal mapping later.
 // Accept the MRA's Accelerate/Brake buttons (slots 1/2 = A/B) as well as the
 // existing D-pad placeholder. Both are digital until analog input is wired.
-wire m_accel1 = m_up1   | joystick_0[4];
-wire m_brake1 = m_down1 | joystick_0[5];
-wire [7:0] pp_accel = m_accel1 ? 8'h90 : 8'h00;
-wire [7:0] pp_brake = m_brake1 ? 8'h90 : 8'h00;
+// PEDALS-2026-09-23: OSD "Pedals" = Analog reads one combined axis (up = accelerate, down = brake),
+// |Y| 0..128 -> 0..0x90 (MAME PORT_MINMAX(0,0x90)) with a dead zone. The Accelerate/Brake buttons still
+// force full pedal; the D-pad is dropped in analog mode because MiSTer also reports the stick as D-pad.
+// Original digital-only mapping below.
+// wire m_accel1 = m_up1   | joystick_0[4];
+// wire m_brake1 = m_down1 | joystick_0[5];
+// wire [7:0] pp_accel = m_accel1 ? 8'h90 : 8'h00;
+// wire [7:0] pp_brake = m_brake1 ? 8'h90 : 8'h00;
+wire       pedal_analog = status[9];
+wire       m_accel1 = (pedal_analog ? 1'b0 : m_up1)   | joystick_0[4];
+wire       m_brake1 = (pedal_analog ? 1'b0 : m_down1) | joystick_0[5];
+wire [7:0] pedal_y_raw  = status[21] ? joystick_r_analog_0[15:8] : joystick_l_analog_0[15:8];
+wire signed [8:0] pedal_y = $signed({pedal_y_raw[7], pedal_y_raw});
+wire [7:0] pedal_mag    = pedal_y[8] ? (8'd0 - pedal_y_raw) : pedal_y_raw;     // |Y|, -128 -> 128 wraps to 0x80
+wire [15:0] pedal_scl   = {8'd0, pedal_mag} * 16'd144;                       // x 0x90 / 128
+wire [7:0] pedal_lvl    = (pedal_mag < 8'd8) ? 8'h00 : pedal_scl[14:7];       // dead zone ~6%
+wire [7:0] ana_accel    = (pedal_analog && pedal_y[8])  ? pedal_lvl : 8'h00;  // up (negative Y)
+wire [7:0] ana_brake    = (pedal_analog && !pedal_y[8]) ? pedal_lvl : 8'h00;  // down
+wire [7:0] pp_accel = m_accel1 ? 8'h90 : ana_accel;
+wire [7:0] pp_brake = m_brake1 ? 8'h90 : ana_brake;
 
 poleposition poleposition
 (
