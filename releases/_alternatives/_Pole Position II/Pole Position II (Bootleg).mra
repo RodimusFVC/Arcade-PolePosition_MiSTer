@@ -24,11 +24,10 @@
     <players>1</players>
     <buttons names="Accelerate,Brake,Gear,Service Mode,Coin,Start 1P,Start 2P,Pause" default="A,B,X,Y,Select,Start,R,L"/>
 
+    <!-- Index 0: ROM -->
     <rom index="0" md5="none" zip="polepos2b.zip|polepos2.zip">
-        <!-- maincpu (Z80) 0x0000-0x2FFF -->
         <part crc="f85212c4" name="136014.180"/>
         <part crc="a9d4c380" name="136014.183"/>
-        <!-- sub1 (Z8002 #1), ROM_LOAD16_BYTE: even=HIGH=.8l, odd=LOW=.8m -->
         <interleave output="16">
             <part crc="643483f7" name="4lcpu.rom" map="01"/>
             <part crc="cf95a6b7" name="3lcpu.rom" map="10"/>
@@ -38,7 +37,6 @@
             <part repeat="4096" map="10">00</part>
         </interleave>
         <part repeat="8192">00</part>
-        <!-- sub2 (Z8002 #2) -->
         <interleave output="16">
             <part crc="613e917d" name="136014.179" map="01"/>
             <part crc="eac35cfa" name="136014.178" map="10"/>
@@ -49,8 +47,8 @@
         </interleave>
     </rom>
 
+    <!-- Index 1: ROM -->
     <rom index="1" md5="none" zip="polepos2b.zip|polepos2.zip">
-        <!-- chars / tiles / sprites / bigsprites(GAP) / road / scalelut -->
         <part crc="fbe5e72f" name="136014.172"/>
         <part crc="ec3ec6e6" name="136014.173"/>
         <part crc="455d79a0" name="136014.170"/>
@@ -69,6 +67,7 @@
         <part crc="a61bff15" name="136014.231"/>
     </rom>
 
+    <!-- Index 2: ROM -->
     <rom index="2" md5="none" zip="polepos2b.zip|polepos2.zip">
         <part crc="16d69c31" name="136014.186"/>
         <part crc="07340311" name="136014.187"/>
@@ -86,7 +85,7 @@
         <part crc="2401c817" name="136014.117"/>
     </rom>
 
-    <!-- Index 3: hiscore config -->
+    <!-- Index 3: Hiscore -->
     <rom index="3" md5="none">
         <part>
         01 FF FF FF 00 FF 00 02 00 02 00 01 00 FF 00 00
@@ -94,18 +93,19 @@
         </part>
     </rom>
 
-    <!-- Index 4: nvram config -->
+    <!-- Index 4: NVRAM -->
     <rom index="4"></rom>
     <nvram index="4" size="2034"></nvram>
 
+    <!-- Index 5: ROM -->
     <rom index="5" md5="none" zip="polepos2b.zip|polepos2.zip">
-        <!-- engine sound, then 52xx voice padded to 0x8000 -->
         <part crc="7d93bc1c" name="136014.181"/>
         <part crc="7d93bc1c" name="136014.182"/>
         <part crc="5b4cf05e" name="136014.106"/>
         <part repeat="24576">00</part>
     </rom>
 
+    <!-- Index 6: ROM -->
     <rom index="6" md5="none" zip="namco51.zip|namco52.zip|namco53.zip|namco54.zip">
         <part crc="c2f57ef8" name="51xx.bin"/>
         <part crc="b326fecb" name="53xx.bin"/>
@@ -114,13 +114,11 @@
     </rom>
 
     <switches default="FB,FF" base="0">
-        <!-- DSWA -->
         <dip name="Coin A"        bits="5,7"   ids="Free Play,2C/1C,3C/2C,1C/2C,4C/3C,1C/3C,3C/1C,1C/1C"/>
         <dip name="Coin B"        bits="3,4"   ids="4C/3C,2C/1C,3C/2C,1C/1C"/>
         <dip name="Speed Unit"    bits="2,2"   ids="mph,km/h"/>
         <dip name="Demo Sounds"   bits="1,1"   ids="Off,On"/>
         <dip name="Freeze"        bits="0,0"   ids="On,Off"/>
-        <!-- DSWB -->
         <dip name="Speed"         bits="8,8"   ids="High,Average"/>
         <dip name="Goal"          bits="9,10"  ids="6,3,5,4"/>
         <dip name="Extended Rank" bits="11,12" ids="D,A,C,B"/>

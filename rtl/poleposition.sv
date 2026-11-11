@@ -310,29 +310,130 @@ module poleposition
         .rom_wr(mcu_rom_wr), .rom_addr_in(mcu_rom_addr), .rom_data_in(mcu_rom_data), .vblank(vblank)
     );
 
+    // 53xx steering inputs: R0 = changed bit, R1 = direction, from the dial; the accumulator steps every MCU clock
+    reg  [7:0]        steer_last;
+    reg  signed [8:0] steer_accum;
+    reg               steer_delta;
+    wire signed [8:0] steer_diff2 = ($signed({1'b0, steer_in}) - $signed({1'b0, steer_last})) <<< 1;
+    wire signed [8:0] steer_pre   = steer_accum + steer_diff2;
+    always @(posedge clock_18) begin
+        if (!mcu_reset_n) begin
+            steer_last  <= 8'h00;
+            steer_accum <= 9'sd0;
+            steer_delta <= 1'b0;
+        end else if (mcu_ena) begin
+            steer_last <= steer_in;
+            if (steer_pre < 0) begin
+                steer_delta <= 1'b0;
+                steer_accum <= steer_pre + 9'sd1;
+            end else if (steer_pre > 0) begin
+                steer_delta <= 1'b1;
+                steer_accum <= steer_pre - 9'sd1;
+            end else begin
+                steer_accum <= steer_pre;
+            end
+        end
+    end
+
+    // 53xx = chips-repo namco_53xx + its MB88 (no MB88 pool in this core yet); ROM slice 0x400-0x7FF of index 6
+    chip_pool_pkg::mb88_i_t n53_mb88_i;
+    chip_pool_pkg::mb88_o_t n53_mb88_o;
     namco_53xx u_n53xx
     (
         .clk(clock_18), .ena(mcu_ena), .reset_n(mcu_reset_n),
         .chip_sel(n06_chipsel_g[1]), .data_out(chip1_din),
-        .dswa(dip_switch_a), .steer_in(steer_in),
-        .rom_wr(mcu_rom_wr), .rom_addr_in(mcu_rom_addr), .rom_data_in(mcu_rom_data)
+        .k_in(4'h0), .in_a({3'b000, steer_delta, 3'b000, steer_accum[0]}), .in_b(dip_switch_a),
+        .rom_wr(mcu_rom_wr && mcu_rom_addr[11:10] == 2'b01), .rom_addr_in(mcu_rom_addr[9:0]), .rom_data_in(mcu_rom_data),
+        .mb88_i(n53_mb88_i), .mb88_o(n53_mb88_o)
     );
 
+    wire  [3:0] n53m_r0, n53m_r1, n53m_r2, n53m_r3, n53m_ol, n53m_oh, n53m_p;
+    wire        n53m_owr;
+    wire [10:0] n53m_rom_a;
+    mb88 u_n53_mcu
+    (
+        .clock(clock_18), .ena(n53_mb88_i.ena), .reset_n(n53_mb88_i.reset_n), .ram_clr(1'b0),
+        .r0_port_in(n53_mb88_i.r_in[3:0]), .r1_port_in(n53_mb88_i.r_in[7:4]), .r2_port_in(n53_mb88_i.r_in[11:8]),
+        .r3_port_in(n53_mb88_i.r_in[15:12]),
+        .r0_port_out(n53m_r0), .r1_port_out(n53m_r1), .r2_port_out(n53m_r2), .r3_port_out(n53m_r3),
+        .k_port_in(n53_mb88_i.k), .ol_port_out(n53m_ol), .oh_port_out(n53m_oh), .o_wr(n53m_owr), .p_port_out(n53m_p),
+        .stby_n(1'b1), .tc_n(n53_mb88_i.tc_n), .irq_n(n53_mb88_i.irq_n), .sc_in_n(1'b1), .si_n(n53_mb88_i.si_n),
+        .sc_out_n(), .so_n(), .to_n(),
+        .rom_addr(n53m_rom_a), .rom_data(n53_mb88_i.rom_d)
+    );
+    assign n53_mb88_o.r_out = {n53m_r3, n53m_r2, n53m_r1, n53m_r0};
+    assign n53_mb88_o.o     = {n53m_oh, n53m_ol};
+    assign n53_mb88_o.o_wr  = n53m_owr;
+    assign n53_mb88_o.p     = n53m_p;
+    assign n53_mb88_o.rom_a = n53m_rom_a;
+
+    // 54xx = chips-repo namco_54xx + its MB88 (no MB88 pool in this core yet); ROM slice 0x800-0xBFF of index 6
+    chip_pool_pkg::mb88_i_t n54_mb88_i;
+    chip_pool_pkg::mb88_o_t n54_mb88_o;
     namco_54xx u_n54xx
     (
         .clk(clock_18), .ena(mcu_ena), .reset_n(mcu_reset_n),
         .chip_sel(n06_chipsel_g[3]), .wr_en(n06_chip_wr_g[3]), .wr_data(n06_chip_dout),
         .discrete_o0(n54_o0), .discrete_o1(n54_o1), .discrete_r1(n54_r1),
-        .rom_wr(mcu_rom_wr), .rom_addr_in(mcu_rom_addr), .rom_data_in(mcu_rom_data)
+        .rom_wr(mcu_rom_wr && mcu_rom_addr[11:10] == 2'b10), .rom_addr_in(mcu_rom_addr[9:0]), .rom_data_in(mcu_rom_data),
+        .mb88_i(n54_mb88_i), .mb88_o(n54_mb88_o)
     );
 
+    wire  [3:0] n54_r0, n54_r1o, n54_r2, n54_r3, n54_ol, n54_oh, n54_p;
+    wire        n54_owr;
+    wire [10:0] n54_rom_a;
+    mb88 #(.IRQ_ENTRY_STALL(3)) u_n54_mcu
+    (
+        .clock(clock_18), .ena(n54_mb88_i.ena), .reset_n(n54_mb88_i.reset_n), .ram_clr(1'b0),
+        .r0_port_in(n54_mb88_i.r_in[3:0]), .r1_port_in(n54_mb88_i.r_in[7:4]), .r2_port_in(n54_mb88_i.r_in[11:8]),
+        .r3_port_in(n54_mb88_i.r_in[15:12]),
+        .r0_port_out(n54_r0), .r1_port_out(n54_r1o), .r2_port_out(n54_r2), .r3_port_out(n54_r3),
+        .k_port_in(n54_mb88_i.k), .ol_port_out(n54_ol), .oh_port_out(n54_oh), .o_wr(n54_owr), .p_port_out(n54_p),
+        .stby_n(1'b1), .tc_n(n54_mb88_i.tc_n), .irq_n(n54_mb88_i.irq_n), .sc_in_n(1'b1), .si_n(n54_mb88_i.si_n),
+        .sc_out_n(), .so_n(), .to_n(),
+        .rom_addr(n54_rom_a), .rom_data(n54_mb88_i.rom_d)
+    );
+    assign n54_mb88_o.r_out = {n54_r3, n54_r2, n54_r1o, n54_r0};
+    assign n54_mb88_o.o     = {n54_oh, n54_ol};
+    assign n54_mb88_o.o_wr  = n54_owr;
+    assign n54_mb88_o.p     = n54_p;
+    assign n54_mb88_o.rom_a = n54_rom_a;
+
+    // 52xx = chips-repo namco_52xx + its MB88 (no MB88 pool in this core yet); ROM slice 0xC00-0xFFF of index 6.
+    // SI pulled high, no TC clock; the voice ROM reads FF from 0x8000 up
+    wire [15:0] n52_addr16;
+    chip_pool_pkg::mb88_i_t n52_mb88_i;
+    chip_pool_pkg::mb88_o_t n52_mb88_o;
     namco_52xx u_n52xx
     (
         .clk(clock_18), .ena(mcu_ena), .reset_n(mcu_reset_n),
         .chip_sel(n06_chipsel_g[2]), .wr_en(n06_chip_wr_g[2]), .wr_data(n06_chip_dout),
-        .discrete_p(n52_p), .sample_addr(n52_sample_addr), .sample_data(sample52_data),
-        .rom_wr(mcu_rom_wr), .rom_addr_in(mcu_rom_addr), .rom_data_in(mcu_rom_data)
+        .si(1'b1), .tc_n(1'b1),
+        .p_out(n52_p), .sample_addr(n52_addr16), .sample_data(n52_addr16[15] ? 8'hFF : sample52_data),
+        .rom_wr(mcu_rom_wr && mcu_rom_addr[11:10] == 2'b11), .rom_addr_in(mcu_rom_addr[9:0]), .rom_data_in(mcu_rom_data),
+        .mb88_i(n52_mb88_i), .mb88_o(n52_mb88_o)
     );
+    assign n52_sample_addr = n52_addr16[14:0];
+
+    wire  [3:0] n52m_r0, n52m_r1, n52m_r2, n52m_r3, n52m_ol, n52m_oh, n52m_p;
+    wire        n52m_owr;
+    wire [10:0] n52m_rom_a;
+    mb88 u_n52_mcu
+    (
+        .clock(clock_18), .ena(n52_mb88_i.ena), .reset_n(n52_mb88_i.reset_n), .ram_clr(1'b0),
+        .r0_port_in(n52_mb88_i.r_in[3:0]), .r1_port_in(n52_mb88_i.r_in[7:4]), .r2_port_in(n52_mb88_i.r_in[11:8]),
+        .r3_port_in(n52_mb88_i.r_in[15:12]),
+        .r0_port_out(n52m_r0), .r1_port_out(n52m_r1), .r2_port_out(n52m_r2), .r3_port_out(n52m_r3),
+        .k_port_in(n52_mb88_i.k), .ol_port_out(n52m_ol), .oh_port_out(n52m_oh), .o_wr(n52m_owr), .p_port_out(n52m_p),
+        .stby_n(1'b1), .tc_n(n52_mb88_i.tc_n), .irq_n(n52_mb88_i.irq_n), .sc_in_n(1'b1), .si_n(n52_mb88_i.si_n),
+        .sc_out_n(), .so_n(), .to_n(),
+        .rom_addr(n52m_rom_a), .rom_data(n52_mb88_i.rom_d)
+    );
+    assign n52_mb88_o.r_out = {n52m_r3, n52m_r2, n52m_r1, n52m_r0};
+    assign n52_mb88_o.o     = {n52m_oh, n52m_ol};
+    assign n52_mb88_o.o_wr  = n52m_owr;
+    assign n52_mb88_o.p     = n52m_p;
+    assign n52_mb88_o.rom_a = n52m_rom_a;
 
 endmodule
 

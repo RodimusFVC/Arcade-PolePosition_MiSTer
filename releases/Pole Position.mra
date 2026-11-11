@@ -24,7 +24,7 @@
     <players>1</players>
     <buttons names="Accelerate,Brake,Gear,Service Mode,Coin,Start 1P,Start 2P,Pause" default="A,B,X,Y,Select,Start,R,L"/>
 
-    <!-- Index 0: CPU code -->
+    <!-- Index 0: ROM -->
     <rom index="0" md5="none" zip="polepos.zip">
         <part crc="c0511173" name="pp3_9.6h"/>
         <part crc="7174bcb7" name="pp1_10b.5h"/>
@@ -40,7 +40,7 @@
         <part repeat="16384">00</part>
     </rom>
 
-    <!-- Index 1: graphics -->
+    <!-- Index 1: ROM -->
     <rom index="1" md5="none" zip="polepos.zip">
         <part crc="2e77187e" name="pp3_28.1f"/>
         <part crc="2e77187e" name="pp3_28.1f"/>
@@ -62,25 +62,25 @@
         <part crc="a61bff15" name="pp1_27.1l"/>
     </rom>
 
-    <!-- Index 2: PROMs (palette / colour / vertical-position / decoders) + WSG waveform + sync -->
+    <!-- Index 2: ROM -->
     <rom index="2" md5="none" zip="polepos.zip">
-        <part crc="f07ff2ad" name="pp1-7.8l"/>    <!-- red palette   0x000 -->
-        <part crc="adbde7d7" name="pp1-8.9l"/>    <!-- green palette 0x100 -->
-        <part crc="ddac786a" name="pp1-9.10l"/>   <!-- blue palette  0x200 -->
-        <part crc="1e8d0491" name="pp2-10.2h"/>   <!-- alpha colour  0x300 -->
-        <part crc="0e4fe8a0" name="pp1-11.4d"/>   <!-- bg colour     0x400 -->
-        <part crc="2d502464" name="pp1-15.9a"/>   <!-- vpos low      0x500 -->
-        <part crc="027aa62c" name="pp1-16.10a"/>  <!-- vpos med      0x600 -->
-        <part crc="1f8d0df3" name="pp1-17.11a"/>  <!-- vpos hi       0x700 -->
-        <part crc="7afc7cfc" name="pp1-12.3c"/>   <!-- road colour   0x800 (0x400) -->
-        <part crc="63fb6057" name="pp3-6.6m"/>    <!-- sprite colour 0xC00 (0x400) -->
-        <part crc="4330a51b" name="pp1-13.8e"/>   <!-- vram addr dec 0x1000 (0x20) -->
-        <part crc="4330a51b" name="pp1-14.9e"/>   <!-- vram addr dec 0x1020 (0x20) -->
-        <part crc="8568decc" name="pp1-5.3b"/>    <!-- namco WSG waveform 0x100 -->
-        <part crc="2401c817" name="pp1-4.9h"/>    <!-- user1 sync chain   0x100 -->
+        <part crc="f07ff2ad" name="pp1-7.8l"/>
+        <part crc="adbde7d7" name="pp1-8.9l"/>
+        <part crc="ddac786a" name="pp1-9.10l"/>
+        <part crc="1e8d0491" name="pp2-10.2h"/>
+        <part crc="0e4fe8a0" name="pp1-11.4d"/>
+        <part crc="2d502464" name="pp1-15.9a"/>
+        <part crc="027aa62c" name="pp1-16.10a"/>
+        <part crc="1f8d0df3" name="pp1-17.11a"/>
+        <part crc="7afc7cfc" name="pp1-12.3c"/>
+        <part crc="63fb6057" name="pp3-6.6m"/>
+        <part crc="4330a51b" name="pp1-13.8e"/>
+        <part crc="4330a51b" name="pp1-14.9e"/>
+        <part crc="8568decc" name="pp1-5.3b"/>
+        <part crc="2401c817" name="pp1-4.9h"/>
     </rom>
 
-    <!-- Index 3: hiscore config -->
+    <!-- Index 3: Hiscore -->
     <rom index="3" md5="none">
         <part>
 		01 FF FF FF 00 FF 00 02 00 02 00 01 00 FF 00 00
@@ -88,11 +88,11 @@
         </part>
     </rom>
 
-    <!-- Index 4: nvram config -->  
+    <!-- Index 4: NVRAM -->
     <rom index="4"></rom>
 	<nvram index="4" size="2034"></nvram>
 
-    <!-- Index 5: sound sample ROMs -->
+    <!-- Index 5: ROM -->
     <rom index="5" md5="none" zip="polepos.zip">
         <part crc="b5ad4d5f" name="pp1_15.6a"/>
         <part crc="8fdd2f6f" name="pp1_16.5a"/>
@@ -102,12 +102,12 @@
         <part repeat="8192">00</part>
     </rom>
 
-    <!-- Index 6: Namco 5xxx MCU internal mask ROMs -->
+    <!-- Index 6: ROM -->
     <rom index="6" md5="none" zip="namco51.zip|namco52.zip|namco53.zip|namco54.zip">
-        <part crc="c2f57ef8" name="51xx.bin"/>   <!-- coin/credit I/O -->
-        <part crc="b326fecb" name="53xx.bin"/>   <!-- steering/DSW I/O -->
-        <part crc="ee7357e0" name="54xx.bin"/>   <!-- engine noise -->
-        <part crc="3257d11e" name="52xx.bin"/>   <!-- sample player, lands @0xC00 -->
+        <part crc="c2f57ef8" name="51xx.bin"/>
+        <part crc="b326fecb" name="53xx.bin"/>
+        <part crc="ee7357e0" name="54xx.bin"/>
+        <part crc="3257d11e" name="52xx.bin"/>
     </rom>
 
     <switches default="FF,74">

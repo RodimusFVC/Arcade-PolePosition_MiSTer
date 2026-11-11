@@ -432,26 +432,8 @@ always @(posedge clk_sys) begin
 	engine_data <= engine_rom[engine_addr];
 end
 
-// CTL-2026-10-24: original block commented out below (replaced by rtl/mister_custom/controllers.sv modules after it)
-// // steering: spinner / mouse / analog wheel / paddle / D-pad
-// wire [7:0] steer_pos;
-// pp_steering pp_steering
-// (
-// 	.clk         (clk_sys),
-// 	.reset       (reset),
-// 	.mode        (status[18:17]),
-// 	.sensitivity (status[16:14]),
-// 	.reverse     (status[13]),
-// 	.left        (m_left1),
-// 	.right       (m_right1),
-// 	.spinner     (spinner_0),
-// 	.mouse       (ps2_mouse),
-// 	.analog_x    (joystick_l_analog_0[7:0]),
-// 	.paddle      (paddle_0),
-// 	.steer_pos   (steer_pos)
-// );
-// CTL-2026-10-24: steering via ctl_mouse + ctl_steer (pp_steering's logic: spinner / mouse X relative, stick / paddle
-// absolute by status[18:17], D-pad ramp, one count per clk/16384 tick). steer_pos powers up 0x80 (was 0); reset sets 0x80.
+// steering via ctl_mouse + ctl_steer: spinner / mouse X relative, stick / paddle absolute by status[18:17], D-pad
+// ramp, one count per clk/16384 tick. steer_pos powers up 0x80; reset sets 0x80.
 wire       steer_mouse_ev;
 wire [9:0] steer_mouse_dx;
 /* verilator lint_off UNUSED */
