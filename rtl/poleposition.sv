@@ -301,14 +301,39 @@ module poleposition
         .chip_dout(n06_chip_dout), .chip_wr(n06_chip_wr)
     );
 
+    // 51xx = chips-repo namco_51xx + its MB88 (no MB88 pool in this core yet); ROM slice 0x000-0x3FF of index 6
+    chip_pool_pkg::mb88_i_t n51_mb88_i;
+    chip_pool_pkg::mb88_o_t n51_mb88_o;
     namco_51xx u_n51xx
     (
         .clk(clock_18), .ena(mcu_ena), .reset_n(mcu_reset_n),
         .chip_sel(n06_chipsel[0]), .rw_in(n06_rw0), .data_out(chip0_din),
         .wr_en(n06_chip_wr[0]), .wr_data(n06_chip_dout),
-        .dswb(dswb_51xx), .in0(in0_51xx), .p_port_out(),
-        .rom_wr(mcu_rom_wr), .rom_addr_in(mcu_rom_addr), .rom_data_in(mcu_rom_data), .vblank(vblank)
+        .in_a(dswb_51xx), .in_b(in0_51xx), .p_port_out(),
+        .rom_wr(mcu_rom_wr && mcu_rom_addr[11:10] == 2'b00), .rom_addr_in(mcu_rom_addr[9:0]), .rom_data_in(mcu_rom_data),
+        .vblank(vblank),
+        .mb88_i(n51_mb88_i), .mb88_o(n51_mb88_o)
     );
+
+    wire  [3:0] n51m_r0, n51m_r1, n51m_r2, n51m_r3, n51m_ol, n51m_oh, n51m_p;
+    wire        n51m_owr;
+    wire [10:0] n51m_rom_a;
+    mb88 u_n51_mcu
+    (
+        .clock(clock_18), .ena(n51_mb88_i.ena), .reset_n(n51_mb88_i.reset_n), .ram_clr(1'b0),
+        .r0_port_in(n51_mb88_i.r_in[3:0]), .r1_port_in(n51_mb88_i.r_in[7:4]), .r2_port_in(n51_mb88_i.r_in[11:8]),
+        .r3_port_in(n51_mb88_i.r_in[15:12]),
+        .r0_port_out(n51m_r0), .r1_port_out(n51m_r1), .r2_port_out(n51m_r2), .r3_port_out(n51m_r3),
+        .k_port_in(n51_mb88_i.k), .ol_port_out(n51m_ol), .oh_port_out(n51m_oh), .o_wr(n51m_owr), .p_port_out(n51m_p),
+        .stby_n(1'b1), .tc_n(n51_mb88_i.tc_n), .irq_n(n51_mb88_i.irq_n), .sc_in_n(1'b1), .si_n(n51_mb88_i.si_n),
+        .sc_out_n(), .so_n(), .to_n(),
+        .rom_addr(n51m_rom_a), .rom_data(n51_mb88_i.rom_d)
+    );
+    assign n51_mb88_o.r_out = {n51m_r3, n51m_r2, n51m_r1, n51m_r0};
+    assign n51_mb88_o.o     = {n51m_oh, n51m_ol};
+    assign n51_mb88_o.o_wr  = n51m_owr;
+    assign n51_mb88_o.p     = n51m_p;
+    assign n51_mb88_o.rom_a = n51m_rom_a;
 
     // 53xx steering inputs: R0 = changed bit, R1 = direction, from the dial; the accumulator steps every MCU clock
     reg  [7:0]        steer_last;

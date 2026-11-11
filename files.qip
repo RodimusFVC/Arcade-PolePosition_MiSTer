@@ -19,7 +19,7 @@ set_global_assignment -name VERILOG_FILE       rtl/mister_custom/hiscore.v
 set_global_assignment -name VERILOG_FILE       rtl/mister_custom/pause.v
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/mister_custom/controllers.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/namco/namco_06xx.sv
-set_global_assignment -name SYSTEMVERILOG_FILE rtl/namco/namco_51xx.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/rodimus/namco_51xx/namco_51xx.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/rodimus/namco_53xx/namco_53xx.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/rodimus/namco_54xx/namco_54xx.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/rodimus/namco_52xx/namco_52xx.sv
