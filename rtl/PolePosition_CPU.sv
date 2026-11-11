@@ -98,7 +98,7 @@ module PolePosition_CPU
 );
 
     //------------------------------------------------------------------------
-    //  Z80 (T80s)
+    //  Z80 (t80sv_T80s)
     //------------------------------------------------------------------------
     wire [15:0] cpu_A;
     wire  [7:0] cpu_Dout;
@@ -106,7 +106,7 @@ module PolePosition_CPU
     wire        n_m1, n_mreq, n_iorq, n_rd, n_wr, n_rfsh;
     wire        n_int;
 
-    T80s #(.Mode(0), .T2Write(1), .IOWait(1)) main_cpu
+    t80sv_T80s #(.Mode(0), .T2Write(1), .IOWait(1)) main_cpu
     (
         .RESET_n (~reset),
         .CLK     (clk),

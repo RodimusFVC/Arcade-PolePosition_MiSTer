@@ -34,7 +34,7 @@ module pp_bootleg_snd
     wire        n_m1, n_mreq, n_iorq, n_rd, n_wr, n_rfsh;
     reg         nmi_pend = 1'b0;      // generic_latch_8 data pending -> NMI
 
-    T80s #(.Mode(0), .T2Write(1), .IOWait(1)) snd_cpu
+    t80sv_T80s #(.Mode(0), .T2Write(1), .IOWait(1)) snd_cpu
     (
         .RESET_n (~reset),
         .CLK     (clk),
