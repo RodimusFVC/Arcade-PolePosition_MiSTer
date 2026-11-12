@@ -1,8 +1,8 @@
-c0e44d6dd8053be7be60914bb89b1c67  rtl/chip_pool_pkg.sv
+92fc1c05262a26e50ca500f2382e37af  rtl/chip_pool_pkg.sv
 90c86afff5d538e18fe2494694a598f1  rtl/mister_custom/controllers.sv
 bab2fb9019c45977cd047d2cd94bd7ea  rtl/mister_custom/hiscore.v
-c26a74e1396eb6f13d24f31ec0f76081  rtl/mister_custom/nvram.v
 895850debf17ba33e5625674ed1c6141  rtl/mister_custom/pause.v
+b47469e471c1de93851bcd4371a8b459  rtl/ram_pool_pkg.sv
 ff9d427a20fefc818ee476c16b5f08d9  rtl/ram_rom/dpram_dc.sv
 9eaf021673e7420682f7cdf2ac78dabe  sys/alsa.sv
 a10466e20716f4b6b1d40388ccf50bd5  sys/arcade_video.v
