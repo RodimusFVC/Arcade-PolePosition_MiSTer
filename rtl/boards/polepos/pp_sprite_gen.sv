@@ -8,6 +8,7 @@ module pp_sprite_gen
     input  wire        ce,
     input  wire [8:0]  hpos,
     input  wire [8:0]  vpos,
+    input  wire [8:0]  ynext,
 
     output wire [10:0] scan_sprite_addr,
     input  wire [15:0] scan_sprite_dout,
@@ -143,7 +144,7 @@ module pp_sprite_gen
         endcase
 
         if (vpos != ygen_prev) begin
-            ygen  <= vpos + 9'd1;
+            ygen  <= ynext;
             gbank <= ~vpos[0];
             clr_i <= 9'd0;
             st    <= S_CLR;

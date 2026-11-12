@@ -8,6 +8,7 @@ module pp_road_gen
     input  wire        ce,
     input  wire [8:0]  hpos,
     input  wire [8:0]  vpos,
+    input  wire [8:0]  ynext,
 
     input  wire [15:0] road_vscroll,
 
@@ -151,7 +152,7 @@ module pp_road_gen
         endcase
 
         if (vpos != ygen_prev) begin
-            ygen  <= vpos + 9'd1;
+            ygen  <= ynext;
             gbank <= ~vpos[0];
             if (gstate == G_IDLE || gstate == G_DONE) gstate <= G_IDLE;
         end

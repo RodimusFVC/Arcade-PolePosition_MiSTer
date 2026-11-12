@@ -4,6 +4,7 @@ bab2fb9019c45977cd047d2cd94bd7ea  rtl/mister_custom/hiscore.v
 895850debf17ba33e5625674ed1c6141  rtl/mister_custom/pause.v
 b47469e471c1de93851bcd4371a8b459  rtl/ram_pool_pkg.sv
 ff9d427a20fefc818ee476c16b5f08d9  rtl/ram_rom/dpram_dc.sv
+128190e36da6509de2ebb8c8ae43cbdc  rtl/video/video_crtflip.v
 9eaf021673e7420682f7cdf2ac78dabe  sys/alsa.sv
 a10466e20716f4b6b1d40388ccf50bd5  sys/arcade_video.v
 efc9d8f6bf2c21abc89913c3d7f722a8  sys/ascal.vhd

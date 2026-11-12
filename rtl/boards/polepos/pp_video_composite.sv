@@ -8,6 +8,7 @@ module pp_video_composite
     input  wire        ce,
     input  wire [8:0]  hpos,
     input  wire [8:0]  vpos,
+    input  wire        flip,
     input  wire        chacl,
     input  wire        diag_swatch,
 
@@ -33,8 +34,12 @@ module pp_video_composite
 );
 
     wire [5:0] a_color; wire [1:0] a_pixel; wire a_bank;
+
+    // CRT Flip: visible lines 16-239 mirror to 255 - v; one line early for video_crtflip's line of latency
+    wire [8:0] vpos_f = flip ? {1'b0, 8'd254 - vpos[7:0]} : vpos;
+    wire [8:0] ynext  = flip ? {1'b0, 8'd253 - vpos[7:0]} : vpos + 9'd1;
     pp_tile_layer #(.SCAN_COLS(0), .COLS(32), .ROWS(32), .USE_HSCROLL(0), .BANK_128V(1))
-    u_alpha (.clk(clk), .ce(ce), .hpos(hpos), .vpos(vpos), .hscroll(16'd0), .chacl(chacl),
+    u_alpha (.clk(clk), .ce(ce), .hpos(hpos), .vpos(vpos_f), .hscroll(16'd0), .chacl(chacl),
              .scan_addr(alpha_scan_addr), .scan_dout(alpha_scan_dout),
              .gfx_addr(alpha_gfx_addr), .gfx_data(alpha_gfx_data),
              .color(a_color), .pixel(a_pixel), .bank128v(a_bank));
@@ -46,7 +51,7 @@ module pp_video_composite
 
     wire [5:0] v_color; wire [1:0] v_pixel; wire v_bunused;
     pp_tile_layer #(.SCAN_COLS(1), .COLS(64), .ROWS(16), .USE_HSCROLL(1), .BANK_128V(0))
-    u_view (.clk(clk), .ce(ce), .hpos(hpos), .vpos(vpos), .hscroll(view_hscroll), .chacl(1'b1),
+    u_view (.clk(clk), .ce(ce), .hpos(hpos), .vpos(vpos_f), .hscroll(view_hscroll), .chacl(1'b1),
             .scan_addr(view_scan_addr), .scan_dout(view_scan_dout),
             .gfx_addr(view_gfx_addr), .gfx_data(view_gfx_data),
             .color(v_color), .pixel(v_pixel), .bank128v(v_bunused));
@@ -55,7 +60,7 @@ module pp_video_composite
             .prom_data(prom_data), .color(v_color), .pixel(v_pixel), .r(vr), .g(vg), .b(vb));
 
     wire [9:0] road_idx; wire road_act;
-    pp_road_gen u_road (.clk(clk), .ce(ce), .hpos(hpos), .vpos(vpos),
+    pp_road_gen u_road (.clk(clk), .ce(ce), .hpos(hpos), .vpos(vpos), .ynext(ynext),
             .road_vscroll(road_vscroll),
             .scan_road_addr(road_scan_addr), .scan_road_dout(road_scan_dout),
             .road_rom_addr(road_rom_addr), .road_rom_data(road_rom_data),
@@ -66,7 +71,7 @@ module pp_video_composite
             .prom_data(prom_data), .road_index(road_idx), .r(rr), .g(rg), .b(rb));
 
     wire [3:0] s_pen; wire [5:0] s_color; wire s_bank, s_active;
-    pp_sprite_gen u_spr (.clk(clk), .ce(ce), .hpos(hpos), .vpos(vpos),
+    pp_sprite_gen u_spr (.clk(clk), .ce(ce), .hpos(hpos), .vpos(vpos), .ynext(ynext),
             .scan_sprite_addr(sprite_scan_addr), .scan_sprite_dout(sprite_scan_dout),
             .scalelut_addr(scalelut_addr), .scalelut_data(scalelut_data),
             .sprgfx_addr(sprgfx_addr), .sprgfx_data(sprgfx_data),
@@ -87,7 +92,7 @@ module pp_video_composite
             .diag_en(sw_on), .diag_indirect(sw_indirect),
             .r(sr), .g(sg), .b(sb), .transparent(s_transp_unused));
 
-    wire        view_region = (vpos < 9'd128);
+    wire        view_region = (vpos_f < 9'd128);
     wire [7:0]  base_r = view_region ? vr : rr;
     wire [7:0]  base_g = view_region ? vg : rg;
     wire [7:0]  base_b = view_region ? vb : rb;

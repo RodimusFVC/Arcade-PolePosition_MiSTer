@@ -162,7 +162,7 @@ module poleposition
 
     pp_video_composite u_video_composite
     (
-        .clk(clock_18), .ce(ena_vidgen), .hpos(hcnt), .vpos(vcnt),
+        .clk(clock_18), .ce(ena_vidgen), .hpos(hcnt), .vpos(vcnt), .flip(flip),
         .chacl(chacl), .diag_swatch(diag_swatch),
         .alpha_scan_addr(alpha_scan_addr), .alpha_scan_dout(alpha_scan_dout),
         .alpha_gfx_addr(gfx_addr), .alpha_gfx_data(gfx_data),
@@ -177,10 +177,21 @@ module poleposition
         .r(bru_r), .g(bru_g), .b(bru_b)
     );
 
+    // flipped: 1 pixel late into the mirror. The picture is board columns 0-254 (255 is past the edge), shown one
+    // column right by the top (VID_H_DELAY); this mirrors those 255 columns in place
+    reg  [11:0] bru_d1;
+    always @(posedge clock_18) if (ena_vidgen) bru_d1 <= {bru_r, bru_g, bru_b};
+    wire [11:0] flip_rgb;
+    video_crtflip u_crtflip
+    (
+        .clk_sys(clock_18), .ce_pix(ena_vidgen), .en(flip), .hblank(blank_h),
+        .rgb_in(flip ? bru_d1 : {bru_r, bru_g, bru_b}), .rgb_out(flip_rgb)
+    );
+
     always @(posedge clock_18) begin
-        video_r <= bru_r;
-        video_g <= bru_g;
-        video_b <= bru_b;
+        video_r <= flip_rgb[11:8];
+        video_g <= flip_rgb[7:4];
+        video_b <= flip_rgb[3:0];
     end
 
     wire       wdog_reset;

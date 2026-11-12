@@ -42,11 +42,6 @@ assign HDMI_BLACKOUT = 0;
 assign HDMI_BOB_DEINT = 0;
 assign VGA_DISABLE = 0;
 
-wire [1:0] ar = status[20:19];
-
-assign VIDEO_ARX = (!ar) ? 12'd2880 : (ar - 1'd1);
-assign VIDEO_ARY = (!ar) ? 12'd2191 : 12'd0;
-
 `include "build_id.v"
 localparam CONF_STR = {
 	"Pole Position;;",
@@ -54,6 +49,7 @@ localparam CONF_STR = {
 	"P1-;",
 	"P1OMR,CRT H-sync adjust,0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,-32,-31,-30,-29,-28,-27,-26,-25,-24,-23,-22,-21,-20,-19,-18,-17,-16,-15,-14,-13,-12,-11,-10,-9,-8,-7,-6,-5,-4,-3,-2,-1;",
 	"P1OSV,CRT V-sync adjust,0,1,2,3,4,5,6,7,-8,-7,-6,-5,-4,-3,-2,-1;",
+	"P1O1,Orientation,Horz,Vert;",
 	"P1O8,Flip Screen,Off,On;",
 	"P1O35,Scandoubler Fx,None,HQ2x,CRT 25%,CRT 50%,CRT 75%;",
 	"P1-;",
@@ -104,6 +100,12 @@ wire [10:0] ps2_key;
 
 wire        forced_scandoubler;
 wire        direct_video;
+
+wire [1:0] ar     = status[20:19];
+wire       turned = status[1];
+
+assign VIDEO_ARX = (!ar) ? (turned ? 12'd2191 : 12'd2880) : (ar - 1'd1);
+assign VIDEO_ARY = (!ar) ? (turned ? 12'd2880 : 12'd2191) : 12'd0;
 
 wire        ioctl_download;
 wire        ioctl_upload;
@@ -219,8 +221,8 @@ wire [11:0] rgb_out;
 wire ce_pix = ce_vid;
 
 wire flip_screen = status[8];
-wire rotate_ccw = flip_screen;
-wire no_rotate = 1'b1;
+wire rotate_ccw  = 1'b1;
+wire no_rotate   = ~turned | direct_video;
 wire video_rotated;
 wire flip = 0;
 
